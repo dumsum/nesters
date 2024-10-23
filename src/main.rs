@@ -163,6 +163,26 @@ enum ReadModifyWriteInstruction {
     Dec,
 }
 
+impl ReadModifyWriteInstruction {
+    fn execute(&self, cpu: &mut Cpu, m: u8) -> u8 {
+        match self {
+            ReadModifyWriteInstruction::Asl => {
+                let a = m.wrapping_shl(1);
+                cpu.p.set_n(a);
+                cpu.p.set_z(a);
+                cpu.p.set_c((m as u16).wrapping_shl(1));
+
+                a
+            }
+            ReadModifyWriteInstruction::Lsr => todo!(),
+            ReadModifyWriteInstruction::Rol => todo!(),
+            ReadModifyWriteInstruction::Ror => todo!(),
+            ReadModifyWriteInstruction::Inc => todo!(),
+            ReadModifyWriteInstruction::Dec => todo!(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 enum ImmInstruction {
     Read(ReadInstruction),
@@ -710,15 +730,33 @@ impl Cpu {
                 StackInstruction::Plp => todo!(),
                 StackInstruction::Jsr => todo!(),
             },
-            Instruction::AccumImpl(accum_impl_instruction) => todo!(),
-            Instruction::Imm(ImmInstruction::Read(inst)) => match self.step {
+            Instruction::AccumImpl(accum_impl_instruction) => match self.step {
+                1 => {
+                    pins.addr = self.pc;
+                    //self.pc += 1;
+                }
+                2 => {
+                    match accum_impl_instruction {
+                        AccumImplInstruction::ReadModifyWrite(read_modify_write_instruction) => {
+                            self.a = read_modify_write_instruction.execute(self, self.a);
+                        }
+                        AccumImplInstruction::Internal(internal_instruction) => todo!(),
+                    }
+
+                    pins.addr = self.pc;
+                    pins.sync = true;
+                }
+
+                _ => panic!(),
+            },
+            Instruction::Imm(ImmInstruction::Read(read_instruction)) => match self.step {
                 1 => {
                     pins.addr = self.pc;
                     self.pc += 1;
                 }
                 2 => {
                     let m = pins.data;
-                    inst.execute(self, m);
+                    read_instruction.execute(self, m);
 
                     pins.addr = self.pc;
                     pins.sync = true;
@@ -759,8 +797,15 @@ fn main() {
     ram[0x1237] = 0xEF;
     ram[0x1238] = 0xA0;
     ram[0x1239] = 0xF0;
+    ram[0x123A] = 0x0A;
+    ram[0x123B] = 0x0A;
+    ram[0x123C] = 0x0A;
+    ram[0x123D] = 0x0A;
+    ram[0x123E] = 0x0A;
+    ram[0x123F] = 0x0A;
 
-    for _ in 0..14 {
+
+    for _ in 0..26 {
         debug!(
             "Cycle {}: AddrBus: {:#06x}, DataBus: {:#04x}, R/W: {}, Sync: {} PC: {:#06x}, Inst: {:x?}, Step: {}, SP: {:#04x}, A: {:#04x}, X: {:#04x}, Y: {:#04x}, P: {}",
             cpu.total_cycles, pins.addr, pins.data, if pins.write {'W'} else {'R'}, pins.sync, cpu.pc, cpu.inst, cpu.step, cpu.s, cpu.a, cpu.x, cpu.y, cpu.p
