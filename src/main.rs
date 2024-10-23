@@ -2,7 +2,7 @@
 
 use log::debug;
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 enum Instruction {
     Stack(StackInstruction),
     AccumImpl(AccumImplInstruction),
@@ -17,13 +17,12 @@ enum Instruction {
     IdxInd(IdxIndInstruction),
     IndIdx(IndIdxInstruction),
     AbsInd(AbsIndInstruction),
-    #[default]
-    Invalid,
+    Invalid(u8),
 }
 
 #[derive(Debug, Clone, Copy)]
 enum StackInstruction {
-    Brk,
+    Brk(Interrupt),
     Rti,
     Rts,
     Pha,
@@ -31,6 +30,14 @@ enum StackInstruction {
     Pla,
     Plp,
     Jsr,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Interrupt {
+    Rst,
+    Irq,
+    Nmi,
+    Brk,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -86,6 +93,57 @@ enum ReadInstruction {
     Cpy,
     Cpx,
     Bit,
+}
+
+impl ReadInstruction {
+    fn execute(&self, cpu: &mut Cpu, m: u8) {
+        match self {
+            ReadInstruction::Lda => {
+                cpu.a = m;
+                cpu.p.set_n(cpu.a);
+                cpu.p.set_z(cpu.a);
+            }
+            ReadInstruction::Ldx => {
+                cpu.x = m;
+                cpu.p.set_n(cpu.x);
+                cpu.p.set_z(cpu.x);
+            }
+            ReadInstruction::Ldy => {
+                cpu.y = m;
+                cpu.p.set_n(cpu.y);
+                cpu.p.set_z(cpu.y);
+            }
+            ReadInstruction::Eor => {
+                cpu.a ^= m;
+                cpu.p.set_n(cpu.a);
+                cpu.p.set_z(cpu.a);
+            }
+            ReadInstruction::And => {
+                cpu.a &= m;
+                cpu.p.set_n(cpu.a);
+                cpu.p.set_z(cpu.a);
+            }
+            ReadInstruction::Ora => {
+                cpu.a |= m;
+                cpu.p.set_n(cpu.a);
+                cpu.p.set_z(cpu.a);
+            }
+            ReadInstruction::Adc => {
+                let c = if cpu.p.c { 1u8 } else { 0u8 };
+                let a = cpu.a;
+                cpu.a = a.wrapping_add(m).wrapping_add(c);
+                cpu.p.set_c(a, m, c);
+                cpu.p.set_v(a, m, c);
+                cpu.p.set_n(cpu.a);
+                cpu.p.set_z(cpu.a);
+            }
+            ReadInstruction::Sbc => todo!(),
+            ReadInstruction::Cmp => todo!(),
+            ReadInstruction::Cpy => todo!(),
+            ReadInstruction::Cpx => todo!(),
+            ReadInstruction::Bit => todo!(),
+        };
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -282,41 +340,14 @@ impl From<Flags> for u8 {
     }
 }
 
-#[derive(Clone, Copy)]
-enum Interrupt {
-    Res,
-    Irq,
-    Nmi,
-}
-
 impl Cpu {
     fn new() -> Self {
         Cpu::default()
     }
 
-    fn clock(&mut self, mut pins: Pins) -> Pins {
-        if self.sync {
-            self.inst = if self.int.is_some() {
-                Instruction::Stack(StackInstruction::Brk)
-            } else {
-                Cpu::decode(pins.data)
-            };
-            self.sync = false;
-            self.inst_cycle = 0;
-        }
-
-        debug!("Cycle {}: PC: {:#06x}, Inst: {:?}, Step: {}, AddrBus: {:#06x}, DataBus: {:#04x}", self.total_cycles, self.pc, self.inst, self.inst_cycle, pins.addr, pins.data);
-        pins = self.step(pins);
-
-        self.inst_cycle += 1;
-        self.total_cycles += 1;
-
-        pins
-    }
-
     fn decode(opcode: u8) -> Instruction {
         match opcode {
-            0x00 => Instruction::Stack(StackInstruction::Brk),
+            0x00 => Instruction::Stack(StackInstruction::Brk(Interrupt::Brk)),
             0x01 => Instruction::IdxInd(IdxIndInstruction::Read(ReadInstruction::Ora)),
             0x05 => Instruction::ZeroPage(ZeroPageInstruction::Read(ReadInstruction::Ora)),
             0x06 => Instruction::ZeroPage(ZeroPageInstruction::ReadModifyWrite(
@@ -559,31 +590,48 @@ impl Cpu {
             0xFE => Instruction::AbsIdxX(AbsIdxInstruction::ReadModifyWrite(
                 ReadModifyWriteInstruction::Inc,
             )),
-            _ => panic!("Illegal opcode {opcode}"),
+            op => Instruction::Invalid(op),
         }
     }
 
-    fn step(&mut self, mut pins: Pins) -> Pins {
+    fn clock(&mut self, mut pins: Pins) -> Pins {
+        if pins.sync | pins.rst | pins.nmi | pins.irq {
+            self.inst = if pins.rst {
+                Instruction::Stack(StackInstruction::Brk(Interrupt::Rst))
+            } else if pins.nmi {
+                Instruction::Stack(StackInstruction::Brk(Interrupt::Nmi))
+            } else if pins.irq {
+                Instruction::Stack(StackInstruction::Brk(Interrupt::Irq))
+            } else {
+                Cpu::decode(pins.data)
+            };
+            pins.sync = false;
+            self.step = 0;
+            self.pc += 1;
+        }
+
+        self.step += 1;
         pins.write = false;
+
         match self.inst {
             Instruction::Stack(stack_instruction) => match stack_instruction {
-                StackInstruction::Brk => match self.inst_cycle {
-                    0 => {
-                        pins.addr = self.pc;
-                    }
+                StackInstruction::Brk(int) => match self.step {
                     1 => {
-                        match self.int {
-                            Some(Interrupt::Irq | Interrupt::Nmi) => {}
-                            Some(Interrupt::Res) | None => self.pc += 1,
-                        }
+                        self.p.i = true;
+                        self.pc += match int {
+                            Interrupt::Brk | Interrupt::Rst => 1,
+                            Interrupt::Nmi | Interrupt::Irq => 0,
+                        };
+
                         pins.addr = self.pc;
                     }
                     2 => {
                         pins.addr = 0x100 | self.s as u16;
-                        self.s.wrapping_sub(1);
-                        match self.int {
-                            Some(Interrupt::Irq | Interrupt::Nmi) => {}
-                            Some(Interrupt::Res) | None => {
+                        self.s = self.s.wrapping_sub(1);
+
+                        match int {
+                            Interrupt::Rst => {}
+                            Interrupt::Irq | Interrupt::Nmi | Interrupt::Brk => {
                                 pins.data = ((self.pc & 0xFF00) >> 8) as u8;
                                 pins.write = true;
                             }
@@ -591,10 +639,11 @@ impl Cpu {
                     }
                     3 => {
                         pins.addr = 0x100 | self.s as u16;
-                        self.s.wrapping_sub(1);
-                        match self.int {
-                            Some(Interrupt::Irq | Interrupt::Nmi) => {}
-                            Some(Interrupt::Res) | None => {
+                        self.s = self.s.wrapping_sub(1);
+
+                        match int {
+                            Interrupt::Rst => {}
+                            Interrupt::Irq | Interrupt::Nmi | Interrupt::Brk => {
                                 pins.data = (self.pc & 0x00FF) as u8;
                                 pins.write = true;
                             }
@@ -602,35 +651,38 @@ impl Cpu {
                     }
                     4 => {
                         pins.addr = 0x100 | self.s as u16;
-                        self.s.wrapping_sub(1);
-                        match self.int {
-                            Some(Interrupt::Irq | Interrupt::Nmi) => {}
-                            Some(Interrupt::Res) | None => {
+                        self.s = self.s.wrapping_sub(1);
+                        match int {
+                            Interrupt::Rst => {}
+                            Interrupt::Irq | Interrupt::Nmi => {
                                 pins.data = self.p.into();
+                                pins.write = true;
+                            }
+                            Interrupt::Brk => {
+                                pins.data = u8::from(self.p) | 1u8 << 4; //assert B with BRK
                                 pins.write = true;
                             }
                         }
                     }
                     5 => {
-                        pins.addr = match self.int {
-                            None | Some(Interrupt::Irq) => 0xFFFE,
-                            Some(Interrupt::Nmi) => 0xFFFA,
-                            Some(Interrupt::Res) => 0xFFFC,
+                        pins.addr = match int {
+                            Interrupt::Brk | Interrupt::Irq => 0xFFFE,
+                            Interrupt::Nmi => 0xFFFA,
+                            Interrupt::Rst => 0xFFFC,
                         }
                     }
                     6 => {
                         self.pc = (self.pc & 0xFF00) | pins.data as u16;
-                        pins.addr = match self.int {
-                            None | Some(Interrupt::Irq) => 0xFFFF,
-                            Some(Interrupt::Nmi) => 0xFFFB,
-                            Some(Interrupt::Res) => 0xFFFD,
+                        pins.addr = match int {
+                            Interrupt::Brk | Interrupt::Irq => 0xFFFF,
+                            Interrupt::Nmi => 0xFFFB,
+                            Interrupt::Rst => 0xFFFD,
                         };
                     }
                     7 => {
                         self.pc = (self.pc & 0x00FF) | (pins.data as u16) << 8;
                         pins.addr = self.pc;
-                        self.int = None;
-                        self.sync = true;
+                        pins.sync = true;
                     }
 
                     _ => panic!(),
@@ -644,7 +696,21 @@ impl Cpu {
                 StackInstruction::Jsr => todo!(),
             },
             Instruction::AccumImpl(accum_impl_instruction) => todo!(),
-            Instruction::Imm(imm_instruction) => todo!(),
+            Instruction::Imm(ImmInstruction::Read(read_instruction)) => match self.step {
+                1 => {
+                    pins.addr = self.pc;
+                    self.pc += 1;
+                }
+                2 => {
+                    let m = pins.data;
+                    read_instruction.execute(self, m);
+
+                    pins.addr = self.pc;
+                    pins.sync = true;
+                }
+
+                _ => panic!(),
+            },
             Instruction::Abs(abs_instruction) => todo!(),
             Instruction::ZeroPage(zero_page_instruction) => todo!(),
             Instruction::ZeroPageIdxX(zero_page_idx_instruction) => todo!(),
@@ -655,24 +721,11 @@ impl Cpu {
             Instruction::IdxInd(idx_ind_instruction) => todo!(),
             Instruction::IndIdx(ind_idx_instruction) => todo!(),
             Instruction::AbsInd(abs_ind_instruction) => todo!(),
-            Instruction::Invalid => todo!(),
+            Instruction::Invalid(op) => panic!("Invalid Instruction {op}"),
         };
+
+        self.total_cycles += 1;
         pins
-    }
-
-    fn res(&mut self) {
-        self.int = Some(Interrupt::Res);
-        self.sync = true;
-    }
-
-    fn nmi(&mut self) {
-        self.int = Some(Interrupt::Nmi);
-    }
-
-    fn irq(&mut self) {
-        if !self.p.i {
-            self.int = Some(Interrupt::Irq);
-        }
     }
 }
 
@@ -680,20 +733,31 @@ fn main() {
     env_logger::init();
     let mut cpu = Cpu::new();
     let mut pins = Pins::new();
-    let mut ram = [0u8; 0xffff];
+    pins.rst = true;
+    let mut ram = [0u8; 0x10000];
 
     ram[0xfffc] = 0x34;
     ram[0xfffd] = 0x12;
     ram[0x1234] = 0xA9;
+    ram[0x1235] = 0xEE;
+    ram[0x1236] = 0xA2;
+    ram[0x1237] = 0xEF;
+    ram[0x1238] = 0xA0;
+    ram[0x1239] = 0xF0;
 
-    cpu.res();
-
-    loop {
+    for _ in 0..14 {
+        debug!(
+            "Cycle {}: AddrBus: {:#06x}, DataBus: {:#04x}, R/W: {}, Sync: {} PC: {:#06x}, Inst: {:x?}, Step: {}, SP: {:#04x}, A: {:#04x}, X: {:#04x}, Y: {:#04x}, P: {:#010b}",
+            cpu.total_cycles, pins.addr, pins.data, if pins.write {'W'} else {'R'}, pins.sync, cpu.pc, cpu.inst, cpu.step, cpu.s, cpu.a, cpu.x, cpu.y, u8::from(cpu.p)
+        );
         pins = cpu.clock(pins);
         if pins.write {
             ram[pins.addr as usize] = pins.data;
         } else {
             pins.data = ram[pins.addr as usize];
         }
+        pins.rst = false;
+        pins.nmi = false;
+        pins.irq = false;
     }
 }
