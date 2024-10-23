@@ -132,7 +132,7 @@ impl ReadInstruction {
                 let c = if cpu.p.c { 1u8 } else { 0u8 };
                 let a = cpu.a;
                 cpu.a = a.wrapping_add(m).wrapping_add(c);
-                cpu.p.set_c(a, m, c);
+                cpu.p.set_c(a as u16 + m as u16 + c as u16);
                 cpu.p.set_v(a, m, c);
                 cpu.p.set_n(cpu.a);
                 cpu.p.set_z(cpu.a);
@@ -330,8 +330,8 @@ impl Flags {
         self.n = (m as i8) < 0;
     }
 
-    fn set_c(&mut self, a: u8, m: u8, c: u8) {
-        self.c = ((a as u16) + (m as u16) + (c as u16)) > 0xFF
+    fn set_c(&mut self, m: u16) {
+        self.c = m > 0xFF;
     }
 
     fn set_v(&mut self, a: u8, m: u8, c: u8) {
