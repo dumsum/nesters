@@ -167,11 +167,8 @@ enum AbsIndInstruction {
     Jump(JumpInstruction),
 }
 
-#[derive(Default)]
 struct Cpu {
-    sync: bool,
-    int: Option<Interrupt>,
-    inst_cycle: u8,
+    step: u8,
     total_cycles: u64,
     pc: u16,
     s: u8,
@@ -182,11 +179,44 @@ struct Cpu {
     inst: Instruction,
 }
 
-#[derive(Default)]
+impl Default for Cpu {
+    fn default() -> Self {
+        Self {
+            step: Default::default(),
+            total_cycles: Default::default(),
+            pc: rand::random(),
+            s: rand::random(),
+            a: rand::random(),
+            x: rand::random(),
+            y: rand::random(),
+            p: Default::default(),
+            inst: Cpu::decode(rand::random()),
+        }
+    }
+}
+
 struct Pins {
     addr: u16,
     data: u8,
+    sync: bool,
     write: bool,
+    rst: bool,
+    nmi: bool,
+    irq: bool,
+}
+
+impl Default for Pins {
+    fn default() -> Self {
+        Self {
+            addr: rand::random(),
+            data: rand::random(),
+            sync: rand::random(),
+            write: rand::random(),
+            rst: rand::random(),
+            nmi: rand::random(),
+            irq: rand::random(),
+        }
+    }
 }
 
 impl Pins {
@@ -195,15 +225,46 @@ impl Pins {
     }
 }
 
-#[derive(Default, Clone, Copy)]
+#[derive(Clone, Copy)]
 struct Flags {
     n: bool,
     v: bool,
-    b: bool,
     d: bool,
     i: bool,
     z: bool,
     c: bool,
+}
+
+impl Default for Flags {
+    fn default() -> Self {
+        Self {
+            n: rand::random(),
+            v: rand::random(),
+            d: rand::random(),
+            i: rand::random(),
+            z: rand::random(),
+            c: rand::random(),
+        }
+    }
+}
+
+impl Flags {
+    fn set_z(&mut self, m: u8) {
+        self.z = m == 0;
+    }
+
+    fn set_n(&mut self, m: u8) {
+        self.n = (m as i8) < 0;
+    }
+
+    fn set_c(&mut self, a: u8, m: u8, c: u8) {
+        self.c = ((a as u16) + (m as u16) + (c as u16)) > 0xFF
+    }
+
+    fn set_v(&mut self, a: u8, m: u8, c: u8) {
+        let isum = (a as i8 as i16) + (m as i8 as i16) + (c as i8 as i16);
+        self.v = !(-128..=127).contains(&isum);
+    }
 }
 
 impl From<Flags> for u8 {
@@ -211,7 +272,7 @@ impl From<Flags> for u8 {
         let n = if p.n { 1u8 << 7 } else { 0u8 };
         let v = if p.v { 1u8 << 6 } else { 0u8 };
         let u = 1u8 << 5;
-        let b = if p.b { 1u8 << 4 } else { 0u8 };
+        let b = 0u8;
         let d = if p.d { 1u8 << 3 } else { 0u8 };
         let i = if p.i { 1u8 << 2 } else { 0u8 };
         let z = if p.z { 1u8 << 1 } else { 0u8 };
