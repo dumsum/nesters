@@ -293,6 +293,21 @@ struct Flags {
     c: bool,
 }
 
+impl std::fmt::Display for Flags {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}{}-B{}{}{}{}",
+            if self.n { 'N' } else { 'n' },
+            if self.v { 'V' } else { 'v' },
+            if self.d { 'D' } else { 'd' },
+            if self.i { 'I' } else { 'i' },
+            if self.z { 'Z' } else { 'z' },
+            if self.c { 'C' } else { 'c' }
+        )
+    }
+}
+
 impl Default for Flags {
     fn default() -> Self {
         Self {
@@ -696,14 +711,14 @@ impl Cpu {
                 StackInstruction::Jsr => todo!(),
             },
             Instruction::AccumImpl(accum_impl_instruction) => todo!(),
-            Instruction::Imm(ImmInstruction::Read(read_instruction)) => match self.step {
+            Instruction::Imm(ImmInstruction::Read(inst)) => match self.step {
                 1 => {
                     pins.addr = self.pc;
                     self.pc += 1;
                 }
                 2 => {
                     let m = pins.data;
-                    read_instruction.execute(self, m);
+                    inst.execute(self, m);
 
                     pins.addr = self.pc;
                     pins.sync = true;
@@ -747,8 +762,8 @@ fn main() {
 
     for _ in 0..14 {
         debug!(
-            "Cycle {}: AddrBus: {:#06x}, DataBus: {:#04x}, R/W: {}, Sync: {} PC: {:#06x}, Inst: {:x?}, Step: {}, SP: {:#04x}, A: {:#04x}, X: {:#04x}, Y: {:#04x}, P: {:#010b}",
-            cpu.total_cycles, pins.addr, pins.data, if pins.write {'W'} else {'R'}, pins.sync, cpu.pc, cpu.inst, cpu.step, cpu.s, cpu.a, cpu.x, cpu.y, u8::from(cpu.p)
+            "Cycle {}: AddrBus: {:#06x}, DataBus: {:#04x}, R/W: {}, Sync: {} PC: {:#06x}, Inst: {:x?}, Step: {}, SP: {:#04x}, A: {:#04x}, X: {:#04x}, Y: {:#04x}, P: {}",
+            cpu.total_cycles, pins.addr, pins.data, if pins.write {'W'} else {'R'}, pins.sync, cpu.pc, cpu.inst, cpu.step, cpu.s, cpu.a, cpu.x, cpu.y, cpu.p
         );
         pins = cpu.clock(pins);
         if pins.write {
