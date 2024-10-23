@@ -79,6 +79,83 @@ enum InternalInstruction {
     Nop,
 }
 
+impl InternalInstruction {
+    fn execute(&self, cpu: &mut Cpu) {
+        match self {
+            InternalInstruction::Txa => {
+                cpu.a = cpu.x;
+                cpu.p.set_n(cpu.a);
+                cpu.p.set_z(cpu.a);
+            }
+            InternalInstruction::Txs => {
+                cpu.s = cpu.x;
+            }
+            InternalInstruction::Tax => {
+                cpu.x = cpu.a;
+                cpu.p.set_n(cpu.x);
+                cpu.p.set_z(cpu.x);
+            }
+            InternalInstruction::Tsx => {
+                cpu.x = cpu.s;
+                cpu.p.set_n(cpu.x);
+                cpu.p.set_z(cpu.x);
+            }
+            InternalInstruction::Tay => {
+                cpu.y = cpu.a;
+                cpu.p.set_n(cpu.y);
+                cpu.p.set_z(cpu.y);
+            }
+            InternalInstruction::Tya => {
+                cpu.a = cpu.y;
+                cpu.p.set_n(cpu.a);
+                cpu.p.set_z(cpu.a);
+            }
+            InternalInstruction::Dex => {
+                cpu.x = cpu.x.wrapping_sub(1);
+                cpu.p.set_n(cpu.x);
+                cpu.p.set_z(cpu.x);
+            }
+            InternalInstruction::Dey => {
+                cpu.y = cpu.y.wrapping_sub(1);
+                cpu.p.set_n(cpu.y);
+                cpu.p.set_z(cpu.y);
+            }
+            InternalInstruction::Clc => {
+                cpu.p.c = false;
+            }
+            InternalInstruction::Sec => {
+                cpu.p.c = true;
+            }
+            InternalInstruction::Cli => {
+                cpu.p.i = false;
+            }
+            InternalInstruction::Sei => {
+                cpu.p.i = true;
+            }
+            InternalInstruction::Cld => {
+                cpu.p.d = false;
+            }
+            InternalInstruction::Sed => {
+                cpu.p.d = true;
+            }
+            InternalInstruction::Clv => {
+                cpu.p.v = false;
+            }
+            InternalInstruction::Inx => {
+                cpu.x = cpu.x.wrapping_add(1);
+                cpu.p.set_n(cpu.x);
+                cpu.p.set_z(cpu.x);
+            }
+            InternalInstruction::Iny => {
+                cpu.y = cpu.y.wrapping_add(1);
+                cpu.p.set_n(cpu.y);
+                cpu.p.set_z(cpu.y);
+            }
+            InternalInstruction::Nop => {}
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 enum ReadInstruction {
     Lda,
@@ -740,7 +817,9 @@ impl Cpu {
                         AccumImplInstruction::ReadModifyWrite(read_modify_write_instruction) => {
                             self.a = read_modify_write_instruction.execute(self, self.a);
                         }
-                        AccumImplInstruction::Internal(internal_instruction) => todo!(),
+                        AccumImplInstruction::Internal(internal_instruction) => {
+                            internal_instruction.execute(self)
+                        }
                     }
 
                     pins.addr = self.pc;
@@ -803,9 +882,9 @@ fn main() {
     ram[0x123D] = 0x0A;
     ram[0x123E] = 0x0A;
     ram[0x123F] = 0x0A;
+    ram[0x1240] = 0xC8;
 
-
-    for _ in 0..26 {
+    for _ in 0..28 {
         debug!(
             "Cycle {}: AddrBus: {:#06x}, DataBus: {:#04x}, R/W: {}, Sync: {} PC: {:#06x}, Inst: {:x?}, Step: {}, SP: {:#04x}, A: {:#04x}, X: {:#04x}, Y: {:#04x}, P: {}",
             cpu.total_cycles, pins.addr, pins.data, if pins.write {'W'} else {'R'}, pins.sync, cpu.pc, cpu.inst, cpu.step, cpu.s, cpu.a, cpu.x, cpu.y, cpu.p
