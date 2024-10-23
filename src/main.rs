@@ -247,15 +247,50 @@ impl ReadModifyWriteInstruction {
                 let a = m.wrapping_shl(1);
                 cpu.p.set_n(a);
                 cpu.p.set_z(a);
-                cpu.p.set_c((m as u16).wrapping_shl(1));
+                cpu.p.c = m & 0x80 != 0;
 
                 a
             }
-            ReadModifyWriteInstruction::Lsr => todo!(),
-            ReadModifyWriteInstruction::Rol => todo!(),
-            ReadModifyWriteInstruction::Ror => todo!(),
-            ReadModifyWriteInstruction::Inc => todo!(),
-            ReadModifyWriteInstruction::Dec => todo!(),
+            ReadModifyWriteInstruction::Lsr => {
+                let a = m.wrapping_shr(1);
+                cpu.p.set_n(a);
+                cpu.p.set_z(a);
+                cpu.p.c = m & 0x01 != 0;
+
+                a
+            },
+            ReadModifyWriteInstruction::Rol => {
+                let c = if cpu.p.c {1u8} else {0u8};
+                let a = m.wrapping_shl(1) & c;
+                
+                cpu.p.set_n(a);
+                cpu.p.set_z(a);
+                cpu.p.c = m & 0x80 != 0;
+
+                a
+            },
+            ReadModifyWriteInstruction::Ror => {
+                let c = if cpu.p.c {0x80u8} else {0u8};
+                let a = m.wrapping_shr(1) & c;
+
+                cpu.p.set_n(a);
+                cpu.p.set_z(a);
+                cpu.p.c = m & 0x01 != 0;
+
+                a
+            },
+            ReadModifyWriteInstruction::Inc => {
+                let m = m.wrapping_add(1);
+                cpu.p.set_n(m);
+                cpu.p.set_z(m);
+                m
+            },
+            ReadModifyWriteInstruction::Dec => {
+                let m = m.wrapping_sub(1);
+                cpu.p.set_n(m);
+                cpu.p.set_z(m);
+                m
+            },
         }
     }
 }
@@ -810,7 +845,6 @@ impl Cpu {
             Instruction::AccumImpl(accum_impl_instruction) => match self.step {
                 1 => {
                     pins.addr = self.pc;
-                    //self.pc += 1;
                 }
                 2 => {
                     match accum_impl_instruction {
