@@ -367,6 +367,7 @@ struct Cpu {
     y: u8,
     p: Flags,
     inst: Instruction,
+    temp: u8,
 }
 
 impl Default for Cpu {
@@ -381,6 +382,7 @@ impl Default for Cpu {
             y: rand::random(),
             p: Default::default(),
             inst: Cpu::decode(rand::random()),
+            temp: rand::random(),
         }
     }
 }
@@ -765,14 +767,14 @@ impl Cpu {
                 StackInstruction::Brk(int) => match self.step {
                     1 => {
                         self.p.i = true;
+                        pins.addr = self.pc;
+                    }
+                    2 => {
                         self.pc += match int {
                             Interrupt::Brk | Interrupt::Rst => 1,
                             Interrupt::Nmi | Interrupt::Irq => 0,
                         };
 
-                        pins.addr = self.pc;
-                    }
-                    2 => {
                         pins.addr = 0x100 | self.s as u16;
                         self.s = self.s.wrapping_sub(1);
 
@@ -819,7 +821,7 @@ impl Cpu {
                         }
                     }
                     6 => {
-                        self.pc = (self.pc & 0xFF00) | pins.data as u16;
+                        self.temp = pins.data;
                         pins.addr = match int {
                             Interrupt::Brk | Interrupt::Irq => 0xFFFF,
                             Interrupt::Nmi => 0xFFFB,
@@ -827,7 +829,7 @@ impl Cpu {
                         };
                     }
                     7 => {
-                        self.pc = (self.pc & 0x00FF) | (pins.data as u16) << 8;
+                        self.pc = (pins.data as u16) << 8 | self.temp as u16;
                         pins.addr = self.pc;
                         pins.sync = true;
                     }
@@ -865,9 +867,9 @@ impl Cpu {
             Instruction::Imm(ImmInstruction::Read(read_instruction)) => match self.step {
                 1 => {
                     pins.addr = self.pc;
-                    self.pc += 1;
                 }
                 2 => {
+                    self.pc += 1;
                     let m = pins.data;
                     read_instruction.execute(self, m);
 
@@ -877,7 +879,26 @@ impl Cpu {
 
                 _ => panic!(),
             },
-            Instruction::Abs(abs_instruction) => todo!(),
+            Instruction::Abs(AbsInstruction::Jump(jump_instruction)) => match self.step {
+                1 => {
+                    pins.addr = self.pc;
+                    self.pc += 1;
+                }
+                2 => {
+                    pins.addr = self.pc;
+                    self.temp = pins.data;
+                }
+                3 => {
+                    self.pc = (pins.data as u16) << 8 | self.temp as u16;
+                    pins.addr = self.pc;
+                    pins.sync = true;
+                }
+                _ => panic!()
+            },
+            Instruction::Abs(AbsInstruction::Read(read_instruction)) => todo!(),
+            Instruction::Abs(AbsInstruction::Write(write_instruction)) => todo!(),
+            Instruction::Abs(AbsInstruction::ReadModifyWrite(read_modify_write_instruction)) => todo!(),
+
             Instruction::ZeroPage(zero_page_instruction) => todo!(),
             Instruction::ZeroPageIdxX(zero_page_idx_instruction) => todo!(),
             Instruction::ZeroPageIdxY(zero_page_idx_instruction) => todo!(),
@@ -917,8 +938,11 @@ fn main() {
     ram[0x123E] = 0x0A;
     ram[0x123F] = 0x0A;
     ram[0x1240] = 0xC8;
+    ram[0x1241] = 0x4C;
+    ram[0x1242] = 0x78;
+    ram[0x1243] = 0x56;
 
-    for _ in 0..28 {
+    for _ in 0..31 {
         debug!(
             "Cycle {}: AddrBus: {:#06x}, DataBus: {:#04x}, R/W: {}, Sync: {} PC: {:#06x}, Inst: {:x?}, Step: {}, SP: {:#04x}, A: {:#04x}, X: {:#04x}, Y: {:#04x}, P: {}",
             cpu.total_cycles, pins.addr, pins.data, if pins.write {'W'} else {'R'}, pins.sync, cpu.pc, cpu.inst, cpu.step, cpu.s, cpu.a, cpu.x, cpu.y, cpu.p
