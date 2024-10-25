@@ -230,6 +230,16 @@ enum WriteInstruction {
     Sty,
 }
 
+impl WriteInstruction {
+    fn execute(&self, cpu: &mut Cpu) -> u8 {
+        match self {
+            WriteInstruction::Sta => cpu.a,
+            WriteInstruction::Stx => cpu.x,
+            WriteInstruction::Sty => cpu.y,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 enum ReadModifyWriteInstruction {
     Asl,
@@ -258,19 +268,19 @@ impl ReadModifyWriteInstruction {
                 cpu.p.c = m & 0x01 != 0;
 
                 a
-            },
+            }
             ReadModifyWriteInstruction::Rol => {
-                let c = if cpu.p.c {1u8} else {0u8};
+                let c = if cpu.p.c { 1u8 } else { 0u8 };
                 let a = m.wrapping_shl(1) & c;
-                
+
                 cpu.p.set_n(a);
                 cpu.p.set_z(a);
                 cpu.p.c = m & 0x80 != 0;
 
                 a
-            },
+            }
             ReadModifyWriteInstruction::Ror => {
-                let c = if cpu.p.c {0x80u8} else {0u8};
+                let c = if cpu.p.c { 0x80u8 } else { 0u8 };
                 let a = m.wrapping_shr(1) & c;
 
                 cpu.p.set_n(a);
@@ -278,19 +288,19 @@ impl ReadModifyWriteInstruction {
                 cpu.p.c = m & 0x01 != 0;
 
                 a
-            },
+            }
             ReadModifyWriteInstruction::Inc => {
                 let m = m.wrapping_add(1);
                 cpu.p.set_n(m);
                 cpu.p.set_z(m);
                 m
-            },
+            }
             ReadModifyWriteInstruction::Dec => {
                 let m = m.wrapping_sub(1);
                 cpu.p.set_n(m);
                 cpu.p.set_z(m);
                 m
-            },
+            }
         }
     }
 }
@@ -359,7 +369,6 @@ enum AbsIndInstruction {
 
 struct Cpu {
     step: u8,
-    total_cycles: u64,
     pc: u16,
     s: u8,
     a: u8,
@@ -374,7 +383,6 @@ impl Default for Cpu {
     fn default() -> Self {
         Self {
             step: Default::default(),
-            total_cycles: Default::default(),
             pc: rand::random(),
             s: rand::random(),
             a: rand::random(),
@@ -390,7 +398,6 @@ impl Default for Cpu {
 struct Pins {
     addr: u16,
     data: u8,
-    sync: bool,
     write: bool,
     rst: bool,
     nmi: bool,
@@ -402,7 +409,6 @@ impl Default for Pins {
         Self {
             addr: rand::random(),
             data: rand::random(),
-            sync: rand::random(),
             write: rand::random(),
             rst: rand::random(),
             nmi: rand::random(),
@@ -744,7 +750,7 @@ impl Cpu {
     }
 
     fn clock(&mut self, mut pins: Pins) -> Pins {
-        if pins.sync | pins.rst | pins.nmi | pins.irq {
+        if self.step == 0 || pins.rst || pins.nmi || pins.irq {
             self.inst = if pins.rst {
                 Instruction::Stack(StackInstruction::Brk(Interrupt::Rst))
             } else if pins.nmi {
@@ -754,9 +760,6 @@ impl Cpu {
             } else {
                 Cpu::decode(pins.data)
             };
-            pins.sync = false;
-            self.step = 0;
-            self.pc += 1;
         }
 
         self.step += 1;
@@ -766,6 +769,7 @@ impl Cpu {
             Instruction::Stack(stack_instruction) => match stack_instruction {
                 StackInstruction::Brk(int) => match self.step {
                     1 => {
+                        self.pc += 1;
                         self.p.i = true;
                         pins.addr = self.pc;
                     }
@@ -831,7 +835,7 @@ impl Cpu {
                     7 => {
                         self.pc = (pins.data as u16) << 8 | self.temp as u16;
                         pins.addr = self.pc;
-                        pins.sync = true;
+                        self.step = 0;
                     }
 
                     _ => panic!(),
@@ -846,6 +850,7 @@ impl Cpu {
             },
             Instruction::AccumImpl(accum_impl_instruction) => match self.step {
                 1 => {
+                    self.pc += 1;
                     pins.addr = self.pc;
                 }
                 2 => {
@@ -859,13 +864,14 @@ impl Cpu {
                     }
 
                     pins.addr = self.pc;
-                    pins.sync = true;
+                    self.step = 0;
                 }
 
                 _ => panic!(),
             },
             Instruction::Imm(ImmInstruction::Read(read_instruction)) => match self.step {
                 1 => {
+                    self.pc += 1;
                     pins.addr = self.pc;
                 }
                 2 => {
@@ -874,30 +880,101 @@ impl Cpu {
                     read_instruction.execute(self, m);
 
                     pins.addr = self.pc;
-                    pins.sync = true;
+                    self.step = 0;
                 }
 
                 _ => panic!(),
             },
             Instruction::Abs(AbsInstruction::Jump(jump_instruction)) => match self.step {
                 1 => {
-                    pins.addr = self.pc;
                     self.pc += 1;
+                    pins.addr = self.pc;
                 }
                 2 => {
+                    self.pc += 1;
                     pins.addr = self.pc;
                     self.temp = pins.data;
                 }
                 3 => {
                     self.pc = (pins.data as u16) << 8 | self.temp as u16;
                     pins.addr = self.pc;
-                    pins.sync = true;
+                    self.step = 0;
                 }
-                _ => panic!()
+                _ => panic!(),
             },
-            Instruction::Abs(AbsInstruction::Read(read_instruction)) => todo!(),
-            Instruction::Abs(AbsInstruction::Write(write_instruction)) => todo!(),
-            Instruction::Abs(AbsInstruction::ReadModifyWrite(read_modify_write_instruction)) => todo!(),
+            Instruction::Abs(AbsInstruction::Read(read_instruction)) => match self.step {
+                1 => {
+                    self.pc += 1;
+                    pins.addr = self.pc;
+                }
+                2 => {
+                    self.pc += 1;
+                    pins.addr = self.pc;
+                    self.temp = pins.data;
+                }
+                3 => {
+                    self.pc += 1;
+                    pins.addr = (pins.data as u16) << 8 | self.temp as u16;
+                }
+                4 => {
+                    read_instruction.execute(self, pins.data);
+                    pins.addr = self.pc;
+                    self.step = 0;
+                }
+                _ => panic!(),
+            },
+            Instruction::Abs(AbsInstruction::Write(write_instruction)) => match self.step {
+                1 => {
+                    self.pc += 1;
+                    pins.addr = self.pc;
+                }
+                2 => {
+                    self.pc += 1;
+                    pins.addr = self.pc;
+                    self.temp = pins.data;
+                }
+                3 => {
+                    self.pc += 1;
+                    pins.addr = (pins.data as u16) << 8 | self.temp as u16;
+                    pins.data = write_instruction.execute(self);
+                    pins.write = true;
+                }
+                4 => {
+                    pins.addr = self.pc;
+                    self.step = 0;
+                }
+                _ => panic!(),
+            },
+            Instruction::Abs(AbsInstruction::ReadModifyWrite(read_modify_write_instruction)) => {
+                match self.step {
+                    1 => {
+                        self.pc += 1;
+                        pins.addr = self.pc;
+                    }
+                    2 => {
+                        self.pc += 1;
+                        pins.addr = self.pc;
+                        self.temp = pins.data;
+                    }
+                    3 => {
+                        self.pc += 1;
+                        pins.addr = (pins.data as u16) << 8 | self.temp as u16;
+                    }
+                    4 => {
+                        self.temp = read_modify_write_instruction.execute(self, pins.data);
+                        pins.write = true;
+                    }
+                    5 => {
+                        pins.data = self.temp;
+                        pins.write = true;
+                    }
+                    6 => {
+                        pins.addr = self.pc;
+                        self.step = 0;
+                    }
+                    _ => panic!(),
+                }
+            }
 
             Instruction::ZeroPage(zero_page_instruction) => todo!(),
             Instruction::ZeroPageIdxX(zero_page_idx_instruction) => todo!(),
@@ -911,7 +988,6 @@ impl Cpu {
             Instruction::Invalid(op) => panic!("Invalid Instruction {op}"),
         };
 
-        self.total_cycles += 1;
         pins
     }
 }
@@ -941,11 +1017,27 @@ fn main() {
     ram[0x1241] = 0x4C;
     ram[0x1242] = 0x78;
     ram[0x1243] = 0x56;
+    ram[0x5678] = 0xAE;
+    ram[0x5679] = 0x66;
+    ram[0x567A] = 0x66;
+    ram[0x567B] = 0x8E;
+    ram[0x567C] = 0x77;
+    ram[0x567D] = 0x77;
+    ram[0x567E] = 0xAC;
+    ram[0x567F] = 0x77;
+    ram[0x5680] = 0x77;
+    ram[0x5681] = 0xEE;
+    ram[0x5682] = 0x77;
+    ram[0x5683] = 0x77;
+    ram[0x5684] = 0xAD;
+    ram[0x5685] = 0x77;
+    ram[0x5686] = 0x77;
+    ram[0x6666] = 0x98;
 
-    for _ in 0..31 {
+    for total_cycles in 0u64..53u64 {
         debug!(
-            "Cycle {}: AddrBus: {:#06x}, DataBus: {:#04x}, R/W: {}, Sync: {} PC: {:#06x}, Inst: {:x?}, Step: {}, SP: {:#04x}, A: {:#04x}, X: {:#04x}, Y: {:#04x}, P: {}",
-            cpu.total_cycles, pins.addr, pins.data, if pins.write {'W'} else {'R'}, pins.sync, cpu.pc, cpu.inst, cpu.step, cpu.s, cpu.a, cpu.x, cpu.y, cpu.p
+            "Cycle {}: AddrBus: {:#06x}, DataBus: {:#04x}, R/W: {}, PC: {:#06x}, IR: {:x?}, Step: {}, SP: {:#04x}, A: {:#04x}, X: {:#04x}, Y: {:#04x}, P: {}",
+            total_cycles, pins.addr, pins.data, if pins.write {'W'} else {'R'}, cpu.pc, cpu.inst, cpu.step, cpu.s, cpu.a, cpu.x, cpu.y, cpu.p
         );
         pins = cpu.clock(pins);
         if pins.write {
