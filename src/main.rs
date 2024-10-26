@@ -1,5 +1,7 @@
 #![allow(unused)]
 
+use std::fmt::write;
+
 use log::debug;
 
 #[derive(Debug, Clone, Copy)]
@@ -976,7 +978,62 @@ impl Cpu {
                 }
             }
 
-            Instruction::ZeroPage(zero_page_instruction) => todo!(),
+            Instruction::ZeroPage(ZeroPageInstruction::Read(read_instruction)) => match self.step {
+                1 => {
+                    self.pc += 1;
+                    pins.addr = self.pc;
+                }
+                2 => {
+                    self.pc += 1;
+                    pins.addr = pins.data as u16;
+                }
+                3 => {
+                    read_instruction.execute(self, pins.data);
+                    pins.addr = self.pc;
+                    self.step = 0;
+                }
+                _ => panic!()
+            },
+            Instruction::ZeroPage(ZeroPageInstruction::Write(write_instruction)) => match self.step {
+                1 => {
+                    self.pc +=1 ;
+                    pins.addr = self.pc;
+                }
+                2 => {
+                    self.pc += 1;
+                    pins.addr = pins.data as u16;
+                    pins.data = write_instruction.execute(self);
+                    pins.write = true;
+                }
+                3 => {
+                    pins.addr = self.pc;
+                    self.step = 0;
+                }
+                _ => panic!()
+            },
+            Instruction::ZeroPage(ZeroPageInstruction::ReadModifyWrite(read_modify_write_instruction)) => match self.step {
+                1 => {
+                    self.pc += 1;
+                    pins.addr = self.pc;
+                }
+                2 => {
+                    self.pc += 1;
+                    pins.addr = pins.data as u16;
+                }
+                3 => {
+                    self.temp = read_modify_write_instruction.execute(self, pins.data);
+                    pins.write = true;
+                }
+                4 => {
+                    pins.data = self.temp;
+                    pins.write = true;
+                }
+                5 => {
+                    pins.addr = self.pc;
+                    self.step = 0;
+                }
+                _ => panic!()
+            },
             Instruction::ZeroPageIdxX(zero_page_idx_instruction) => todo!(),
             Instruction::ZeroPageIdxY(zero_page_idx_instruction) => todo!(),
             Instruction::AbsIdxX(abs_idx_instruction) => todo!(),
@@ -1032,9 +1089,13 @@ fn main() {
     ram[0x5684] = 0xAD;
     ram[0x5685] = 0x77;
     ram[0x5686] = 0x77;
+    ram[0x5687] = 0xA6;
+    ram[0x5688] = 0x13;
+    ram[0x0013] = 0x24;
     ram[0x6666] = 0x98;
 
-    for total_cycles in 0u64..53u64 {
+
+    for total_cycles in 0u64..56u64 {
         debug!(
             "Cycle {}: AddrBus: {:#06x}, DataBus: {:#04x}, R/W: {}, PC: {:#06x}, IR: {:x?}, Step: {}, SP: {:#04x}, A: {:#04x}, X: {:#04x}, Y: {:#04x}, P: {}",
             total_cycles, pins.addr, pins.data, if pins.write {'W'} else {'R'}, cpu.pc, cpu.inst, cpu.step, cpu.s, cpu.a, cpu.x, cpu.y, cpu.p
