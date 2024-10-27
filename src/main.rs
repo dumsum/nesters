@@ -751,7 +751,7 @@ impl Cpu {
         }
     }
 
-    fn clock(&mut self, mut pins: Pins) -> Pins {
+    fn clock(&mut self, pins: &mut Pins) {
         if self.step == 0 || pins.rst || pins.nmi || pins.irq {
             self.inst = if pins.rst {
                 Instruction::Stack(StackInstruction::Brk(Interrupt::Rst))
@@ -992,11 +992,12 @@ impl Cpu {
                     pins.addr = self.pc;
                     self.step = 0;
                 }
-                _ => panic!()
+                _ => panic!(),
             },
-            Instruction::ZeroPage(ZeroPageInstruction::Write(write_instruction)) => match self.step {
+            Instruction::ZeroPage(ZeroPageInstruction::Write(write_instruction)) => match self.step
+            {
                 1 => {
-                    self.pc +=1 ;
+                    self.pc += 1;
                     pins.addr = self.pc;
                 }
                 2 => {
@@ -1009,9 +1010,11 @@ impl Cpu {
                     pins.addr = self.pc;
                     self.step = 0;
                 }
-                _ => panic!()
+                _ => panic!(),
             },
-            Instruction::ZeroPage(ZeroPageInstruction::ReadModifyWrite(read_modify_write_instruction)) => match self.step {
+            Instruction::ZeroPage(ZeroPageInstruction::ReadModifyWrite(
+                read_modify_write_instruction,
+            )) => match self.step {
                 1 => {
                     self.pc += 1;
                     pins.addr = self.pc;
@@ -1032,20 +1035,202 @@ impl Cpu {
                     pins.addr = self.pc;
                     self.step = 0;
                 }
-                _ => panic!()
+                _ => panic!(),
             },
-            Instruction::ZeroPageIdxX(zero_page_idx_instruction) => todo!(),
-            Instruction::ZeroPageIdxY(zero_page_idx_instruction) => todo!(),
-            Instruction::AbsIdxX(abs_idx_instruction) => todo!(),
-            Instruction::AbsIdxY(abs_idx_instruction) => todo!(),
+            (Instruction::ZeroPageIdxX(ZeroPageIdxInstruction::Read(read_instruction))
+            | Instruction::ZeroPageIdxY(ZeroPageIdxInstruction::Read(read_instruction))) => {
+                match self.step {
+                    1 => {
+                        self.pc += 1;
+                        pins.addr = self.pc;
+                    }
+                    2 => {
+                        self.pc += 1;
+                        pins.addr = pins.data as u16;
+                    }
+                    3 => {
+                        pins.addr += match self.inst {
+                            Instruction::ZeroPageIdxX(_) => self.x,
+                            Instruction::ZeroPageIdxY(_) => self.y,
+                            _ => unreachable!(),
+                        } as u16;
+                    }
+                    4 => {
+                        read_instruction.execute(self, pins.data);
+                        pins.addr = self.pc;
+                        self.step = 0;
+                    }
+                    _ => panic!(),
+                }
+            }
+            (Instruction::ZeroPageIdxX(ZeroPageIdxInstruction::Write(write_instruction))
+            | Instruction::ZeroPageIdxY(ZeroPageIdxInstruction::Write(write_instruction))) => {
+                match self.step {
+                    1 => {
+                        self.pc += 1;
+                        pins.addr = self.pc;
+                    }
+                    2 => {
+                        self.pc += 1;
+                        pins.addr = pins.data as u16;
+                    }
+                    3 => {
+                        pins.addr += match self.inst {
+                            Instruction::ZeroPageIdxX(_) => self.x,
+                            Instruction::ZeroPageIdxY(_) => self.y,
+                            _ => unreachable!(),
+                        } as u16;
+                        pins.data = write_instruction.execute(self);
+                        pins.write = true;
+                    }
+                    4 => {
+                        pins.addr = self.pc;
+                        self.step = 0;
+                    }
+                    _ => panic!(),
+                }
+            }
+            (Instruction::ZeroPageIdxX(ZeroPageIdxInstruction::ReadModifyWrite(
+                read_modify_write_instruction,
+            ))) => match self.step {
+                1 => {
+                    self.pc += 1;
+                    pins.addr = self.pc;
+                }
+                2 => {
+                    self.pc += 1;
+                    pins.addr = pins.data as u16;
+                }
+                3 => {
+                    pins.addr += self.x as u16;
+                }
+                4 => {
+                    self.temp = pins.data;
+                    pins.write = true;
+                }
+                5 => {
+                    pins.data = read_modify_write_instruction.execute(self, self.temp);
+                    pins.write = true;
+                }
+                6 => {
+                    pins.addr = self.pc;
+                    self.step = 0;
+                }
+                _ => panic!(),
+            },
+            (Instruction::ZeroPageIdxY(ZeroPageIdxInstruction::ReadModifyWrite(_))) => {
+                unreachable!()
+            }
+            Instruction::AbsIdxX(AbsIdxInstruction::Read(read_instruction))
+            | Instruction::AbsIdxY(AbsIdxInstruction::Read(read_instruction)) => match self.step {
+                1 => {
+                    self.pc += 1;
+                    pins.addr = self.pc;
+                }
+                2 => {
+                    self.pc += 1;
+                    self.temp = pins.data;
+                    pins.addr = self.pc;
+                }
+                3 => {
+                    pins.addr = (pins.data as u16) << 8 | self.temp.wrapping_add(match self.inst {
+                        Instruction::AbsIdxX(_) => self.x,
+                        Instruction::AbsIdxY(_) => self.y,
+                        _ => unreachable!(),
+                    }) as u16;
+                }
+                4 => {
+                    let adl_idx = (pins.addr & 0x00FF) as u8;
+                    if adl_idx < self.temp {
+                        pins.addr += 0x100;
+                    } else {
+                        read_instruction.execute(self, pins.data);
+                        pins.addr = self.pc;
+                        self.step = 0;
+                    }
+                }
+                5 => {
+                    read_instruction.execute(self, pins.data);
+                    pins.addr = self.pc;
+                    self.step = 0;
+                }
+                _ => panic!()
+            }
+            Instruction::AbsIdxX(AbsIdxInstruction::Write(write_instruction))
+            | Instruction::AbsIdxY(AbsIdxInstruction::Write(write_instruction)) => match self.step {
+                1 => {
+                    self.pc += 1;
+                    pins.addr = self.pc;
+                }
+                2 => {
+                    self.pc += 1;
+                    self.temp = pins.data;
+                    pins.addr = self.pc;
+                }
+                3 => {
+                    pins.addr = (pins.data as u16) << 8 | self.temp.wrapping_add(match self.inst {
+                        Instruction::AbsIdxX(_) => self.x,
+                        Instruction::AbsIdxY(_) => self.y,
+                        _ => unreachable!(),
+                    }) as u16;
+                }
+                4 => {
+                    let adl_idx = (pins.addr & 0x00FF) as u8;
+                    if adl_idx < self.temp {
+                        pins.addr += 0x100;
+                    }
+                    pins.data = write_instruction.execute(self);
+                }
+                5 => {
+                    pins.addr = self.pc;
+                    self.step = 0;
+                }
+                _ => panic!()
+            }
+            Instruction::AbsIdxX(AbsIdxInstruction::ReadModifyWrite(
+                read_modify_write_instruction,
+            )) => match self.step {
+                1 => {
+                    self.pc += 1;
+                    pins.addr = self.pc;
+                }
+                2 => {
+                    self.pc += 1;
+                    self.temp = pins.data;
+                    pins.addr = self.pc;
+                }
+                3 => {
+                    pins.addr = (pins.data as u16) << 8 | self.temp.wrapping_add(self.x) as u16;
+                }
+                4 => {
+                    let adl_idx = (pins.addr & 0x00FF) as u8;
+                    if adl_idx < self.temp {
+                        pins.addr += 0x100;
+                    }
+                }
+                5 => {
+                    self.temp = pins.data;
+                    pins.write = true;
+                }
+                6 => {
+                    pins.data = read_modify_write_instruction.execute(self, self.temp);
+                    pins.write = true;
+                }
+                7 => {
+                    pins.addr = self.pc;
+                    self.step = 0;
+                }
+                _ => panic!()
+            }
+            Instruction::AbsIdxY(AbsIdxInstruction::ReadModifyWrite(_)) => {
+                unreachable!()
+            }
             Instruction::Rel(rel_instruction) => todo!(),
             Instruction::IdxInd(idx_ind_instruction) => todo!(),
             Instruction::IndIdx(ind_idx_instruction) => todo!(),
             Instruction::AbsInd(abs_ind_instruction) => todo!(),
             Instruction::Invalid(op) => panic!("Invalid Instruction {op}"),
         };
-
-        pins
     }
 }
 
@@ -1094,13 +1279,12 @@ fn main() {
     ram[0x0013] = 0x24;
     ram[0x6666] = 0x98;
 
-
     for total_cycles in 0u64..56u64 {
         debug!(
             "Cycle {}: AddrBus: {:#06x}, DataBus: {:#04x}, R/W: {}, PC: {:#06x}, IR: {:x?}, Step: {}, SP: {:#04x}, A: {:#04x}, X: {:#04x}, Y: {:#04x}, P: {}",
             total_cycles, pins.addr, pins.data, if pins.write {'W'} else {'R'}, cpu.pc, cpu.inst, cpu.step, cpu.s, cpu.a, cpu.x, cpu.y, cpu.p
         );
-        pins = cpu.clock(pins);
+        cpu.clock(&mut pins);
         if pins.write {
             ram[pins.addr as usize] = pins.data;
         } else {
