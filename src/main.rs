@@ -59,6 +59,21 @@ enum BranchInstruction {
     Bvs,
 }
 
+impl BranchInstruction {
+    fn execute(&self, cpu: &Cpu) -> bool {
+        match self {
+            BranchInstruction::Bcc => !cpu.p.c,
+            BranchInstruction::Bcs => cpu.p.c,
+            BranchInstruction::Bne => !cpu.p.z,
+            BranchInstruction::Beq => cpu.p.z,
+            BranchInstruction::Bpl => !cpu.p.n,
+            BranchInstruction::Bmi => cpu.p.n,
+            BranchInstruction::Bvc => !cpu.p.v,
+            BranchInstruction::Bvs => cpu.p.v,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 enum InternalInstruction {
     Txa,
@@ -1225,10 +1240,187 @@ impl Cpu {
             Instruction::AbsIdxY(AbsIdxInstruction::ReadModifyWrite(_)) => {
                 unreachable!()
             }
-            Instruction::Rel(rel_instruction) => todo!(),
-            Instruction::IdxInd(idx_ind_instruction) => todo!(),
-            Instruction::IndIdx(ind_idx_instruction) => todo!(),
-            Instruction::AbsInd(abs_ind_instruction) => todo!(),
+            Instruction::Rel(RelInstruction::Branch(branch_instruction)) => match self.step {
+                1 => {
+                    self.pc += 1;
+                    pins.addr = self.pc;
+                }
+                2 => {
+                    self.pc += 1;
+                    self.temp = pins.data;
+                    if branch_instruction.execute(self) {
+                        let pch = (self.pc & 0xFF00);
+                        let pcl = (self.pc & 0x00FF) as u8;
+                        let pcl = pcl.wrapping_add(self.temp);
+                        self.pc = pch & pcl as u16;
+                    } else {
+                        self.step = 0;
+                    }
+                    pins.addr = self.pc;
+                }
+                3 => {
+                    let pcl = (pins.addr & 0x00FF) as u8;
+                    if pcl < self.temp {
+                        self.pc += 0x100;
+                    } else {
+                        self.step = 0;
+                    }
+                    pins.addr = self.pc;
+                }
+                4 => {
+                    self.step = 0;
+                }
+                _ => panic!()
+            },
+            Instruction::IdxInd(IdxIndInstruction::Read(read_instruction)) => match self.step {
+                1 => {
+                    self.pc += 1;
+                    pins.addr = self.pc;
+                }
+                2 => {
+                    self.pc += 1;
+                    pins.addr = pins.data as u16;
+                }
+                3 => {
+                    pins.addr = pins.addr.wrapping_add(self.x as u16);
+                }
+                4 => {
+                    self.temp = pins.data;
+                    pins.addr = pins.addr.wrapping_add(1);
+                }
+                5 => {
+                    pins.addr = (pins.data as u16) << 8 | self.temp as u16;
+                }
+                6 => {
+                    read_instruction.execute(self, pins.data);
+                    pins.addr = self.pc;
+                    self.step = 0;
+                }
+                _ => panic!()
+            },
+            Instruction::IdxInd(IdxIndInstruction::Write(write_instruction)) => match self.step {
+                1 => {
+                    self.pc += 1;
+                    pins.addr = self.pc;
+                }
+                2 => {
+                    self.pc += 1;
+                    pins.addr = pins.data as u16;
+                }
+                3 => {
+                    pins.addr = pins.addr.wrapping_add(self.x as u16);
+                }
+                4 => {
+                    self.temp = pins.data;
+                    pins.addr = pins.addr.wrapping_add(1);
+                }
+                5 => {
+                    pins.addr = (pins.data as u16) << 8 | self.temp as u16;
+                    pins.data = write_instruction.execute(self);
+                    pins.write = true;
+                }
+                6 => {
+                    pins.addr = self.pc;
+                    self.step = 0;
+                }
+                _ => panic!()
+            }
+            Instruction::IndIdx(IndIdxInstruction::Read(read_instruction)) => match self.step {
+                1 => {
+                    self.pc += 1;
+                    pins.addr = self.pc;
+                }
+                2 => {
+                    self.pc += 1;
+                    pins.addr = pins.data as u16;
+                }
+                3 => {
+                    self.temp = pins.data; // ADL
+                    pins.addr = pins.addr.wrapping_add(1) & 0x00FF;
+                }
+                4 => {
+                    let adl_idx = self.temp.wrapping_add(self.y);
+                    pins.addr = (pins.data as u16) << 8 | adl_idx as u16;
+                }
+                5 => {
+                    let adl_idx = (pins.addr & 0x00FF) as u8;
+                    if adl_idx < self.temp {
+                        pins.addr += 0x100;
+                    } else {
+                        read_instruction.execute(self, pins.data);
+                        pins.addr = self.pc;
+                        self.step = 0;
+                    }
+                }
+                6 => {
+                    read_instruction.execute(self, pins.data);
+                    pins.addr = self.pc;
+                    self.step = 0;
+                }
+                _ => panic!()
+            },
+            Instruction::IndIdx(IndIdxInstruction::Write(write_instruction)) => match self.step {
+                1 => {
+                    self.pc += 1;
+                    pins.addr = self.pc;
+                }
+                2 => {
+                    self.pc += 1;
+                    pins.addr = pins.data as u16;
+                }
+                3 => {
+                    self.temp = pins.data; // ADL
+                    pins.addr = pins.addr.wrapping_add(1) & 0x00FF;
+                }
+                4 => {
+                    let adl_idx = self.temp.wrapping_add(self.y);
+                    pins.addr = (pins.data as u16) << 8 | adl_idx as u16;
+                }
+                5 => {
+                    let adl_idx = (pins.addr & 0x00FF) as u8;
+                    if adl_idx < self.temp {
+                        pins.addr += 0x100;
+                    } else {
+                        pins.addr = self.pc;
+                        self.step = 0;
+                    }
+                    pins.data = write_instruction.execute(self);
+                    pins.write = true;
+                }
+                6 => {
+                    pins.addr = self.pc;
+                    self.step = 0;
+                }
+                _ => panic!()
+            },
+            Instruction::AbsInd(_) => match self.step {
+                1 => {
+                    self.pc += 1;
+                    pins.addr = self.pc;
+                }
+                2 => {
+                    self.pc += 1;
+                    self.temp = pins.data;
+                    pins.addr = self.pc;
+                }
+                3 => {
+                    self.pc += 1;
+                    pins.addr = (pins.data as u16) << 8 | self.temp as u16;
+                }
+                4 => {
+                    self.temp = pins.data;
+                    let adh = pins.addr & 0xFF00;
+                    let adl = (pins.addr & 0x00FF) as u8;
+                    let adl = adl.wrapping_add(1);
+                    pins.addr = adh & adl as u16;
+                }
+                5 => {
+                    self.pc = (pins.data as u16) << 8 | self.temp as u16;
+                    self.step = 0;
+                    pins.addr = self.pc;
+                }
+                _ => panic!()
+            },
             Instruction::Invalid(op) => panic!("Invalid Instruction {op}"),
         };
     }
