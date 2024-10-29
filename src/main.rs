@@ -231,11 +231,39 @@ impl ReadInstruction {
                 cpu.p.set_n(cpu.a);
                 cpu.p.set_z(cpu.a);
             }
-            ReadInstruction::Sbc => todo!(),
-            ReadInstruction::Cmp => todo!(),
-            ReadInstruction::Cpy => todo!(),
-            ReadInstruction::Cpx => todo!(),
-            ReadInstruction::Bit => todo!(),
+            ReadInstruction::Sbc => {
+                let c = if cpu.p.c { 1u8 } else { 0u8 };
+                let a = cpu.a;
+                let m = !m;
+                cpu.a = a.wrapping_add(m).wrapping_add(c);
+                cpu.p.set_c(a as u16 + m as u16 + c as u16);
+                cpu.p.set_v(a, m, c);
+                cpu.p.set_n(cpu.a);
+                cpu.p.set_z(cpu.a);
+            }
+            ReadInstruction::Cmp => {
+                cpu.p.set_c((cpu.a as u16).wrapping_sub(m as u16));
+                let r = cpu.a.wrapping_sub(m);
+                cpu.p.set_n(r);
+                cpu.p.set_z(r);
+            }
+            ReadInstruction::Cpy => {
+                cpu.p.set_c((cpu.y as u16).wrapping_sub(m as u16));
+                let r = cpu.y.wrapping_sub(m);
+                cpu.p.set_n(r);
+                cpu.p.set_z(r);
+            }
+            ReadInstruction::Cpx => {
+                cpu.p.set_c((cpu.x as u16).wrapping_sub(m as u16));
+                let r = cpu.x.wrapping_sub(m);
+                cpu.p.set_n(r);
+                cpu.p.set_z(r);
+            }
+            ReadInstruction::Bit => {
+                cpu.p.set_z(cpu.a & m);
+                cpu.p.n = m & (1 << 7) != 0;
+                cpu.p.z = m & (1 << 6) != 0;
+            }
         };
     }
 }
@@ -1148,11 +1176,12 @@ impl Cpu {
                     pins.addr = self.pc;
                 }
                 3 => {
-                    pins.addr = (pins.data as u16) << 8 | self.temp.wrapping_add(match self.inst {
-                        Instruction::AbsIdxX(_) => self.x,
-                        Instruction::AbsIdxY(_) => self.y,
-                        _ => unreachable!(),
-                    }) as u16;
+                    pins.addr = (pins.data as u16) << 8
+                        | self.temp.wrapping_add(match self.inst {
+                            Instruction::AbsIdxX(_) => self.x,
+                            Instruction::AbsIdxY(_) => self.y,
+                            _ => unreachable!(),
+                        }) as u16;
                 }
                 4 => {
                     let adl_idx = (pins.addr & 0x00FF) as u8;
@@ -1169,38 +1198,41 @@ impl Cpu {
                     pins.addr = self.pc;
                     self.step = 0;
                 }
-                _ => panic!()
-            }
+                _ => panic!(),
+            },
             Instruction::AbsIdxX(AbsIdxInstruction::Write(write_instruction))
-            | Instruction::AbsIdxY(AbsIdxInstruction::Write(write_instruction)) => match self.step {
-                1 => {
-                    self.pc += 1;
-                    pins.addr = self.pc;
-                }
-                2 => {
-                    self.pc += 1;
-                    self.temp = pins.data;
-                    pins.addr = self.pc;
-                }
-                3 => {
-                    pins.addr = (pins.data as u16) << 8 | self.temp.wrapping_add(match self.inst {
-                        Instruction::AbsIdxX(_) => self.x,
-                        Instruction::AbsIdxY(_) => self.y,
-                        _ => unreachable!(),
-                    }) as u16;
-                }
-                4 => {
-                    let adl_idx = (pins.addr & 0x00FF) as u8;
-                    if adl_idx < self.temp {
-                        pins.addr += 0x100;
+            | Instruction::AbsIdxY(AbsIdxInstruction::Write(write_instruction)) => {
+                match self.step {
+                    1 => {
+                        self.pc += 1;
+                        pins.addr = self.pc;
                     }
-                    pins.data = write_instruction.execute(self);
+                    2 => {
+                        self.pc += 1;
+                        self.temp = pins.data;
+                        pins.addr = self.pc;
+                    }
+                    3 => {
+                        pins.addr = (pins.data as u16) << 8
+                            | self.temp.wrapping_add(match self.inst {
+                                Instruction::AbsIdxX(_) => self.x,
+                                Instruction::AbsIdxY(_) => self.y,
+                                _ => unreachable!(),
+                            }) as u16;
+                    }
+                    4 => {
+                        let adl_idx = (pins.addr & 0x00FF) as u8;
+                        if adl_idx < self.temp {
+                            pins.addr += 0x100;
+                        }
+                        pins.data = write_instruction.execute(self);
+                    }
+                    5 => {
+                        pins.addr = self.pc;
+                        self.step = 0;
+                    }
+                    _ => panic!(),
                 }
-                5 => {
-                    pins.addr = self.pc;
-                    self.step = 0;
-                }
-                _ => panic!()
             }
             Instruction::AbsIdxX(AbsIdxInstruction::ReadModifyWrite(
                 read_modify_write_instruction,
@@ -1235,8 +1267,8 @@ impl Cpu {
                     pins.addr = self.pc;
                     self.step = 0;
                 }
-                _ => panic!()
-            }
+                _ => panic!(),
+            },
             Instruction::AbsIdxY(AbsIdxInstruction::ReadModifyWrite(_)) => {
                 unreachable!()
             }
@@ -1270,7 +1302,7 @@ impl Cpu {
                 4 => {
                     self.step = 0;
                 }
-                _ => panic!()
+                _ => panic!(),
             },
             Instruction::IdxInd(IdxIndInstruction::Read(read_instruction)) => match self.step {
                 1 => {
@@ -1296,7 +1328,7 @@ impl Cpu {
                     pins.addr = self.pc;
                     self.step = 0;
                 }
-                _ => panic!()
+                _ => panic!(),
             },
             Instruction::IdxInd(IdxIndInstruction::Write(write_instruction)) => match self.step {
                 1 => {
@@ -1323,8 +1355,8 @@ impl Cpu {
                     pins.addr = self.pc;
                     self.step = 0;
                 }
-                _ => panic!()
-            }
+                _ => panic!(),
+            },
             Instruction::IndIdx(IndIdxInstruction::Read(read_instruction)) => match self.step {
                 1 => {
                     self.pc += 1;
@@ -1357,7 +1389,7 @@ impl Cpu {
                     pins.addr = self.pc;
                     self.step = 0;
                 }
-                _ => panic!()
+                _ => panic!(),
             },
             Instruction::IndIdx(IndIdxInstruction::Write(write_instruction)) => match self.step {
                 1 => {
@@ -1391,7 +1423,7 @@ impl Cpu {
                     pins.addr = self.pc;
                     self.step = 0;
                 }
-                _ => panic!()
+                _ => panic!(),
             },
             Instruction::AbsInd(_) => match self.step {
                 1 => {
@@ -1419,7 +1451,7 @@ impl Cpu {
                     self.step = 0;
                     pins.addr = self.pc;
                 }
-                _ => panic!()
+                _ => panic!(),
             },
             Instruction::Invalid(op) => panic!("Invalid Instruction {op}"),
         };
