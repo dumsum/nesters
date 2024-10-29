@@ -540,6 +540,19 @@ impl From<Flags> for u8 {
     }
 }
 
+impl From<u8> for Flags {
+    fn from(value: u8) -> Self {
+        Self {
+            n: value & (1 << 7) != 0,
+            v: value & (1 << 6) != 0,
+            d: value & (1 << 3) != 0,
+            i: value & (1 << 2) != 0,
+            z: value & (1 << 1) != 0,
+            c: value & (1 << 0) != 0,
+        }
+    }
+}
+
 impl Cpu {
     fn new() -> Self {
         Cpu::default()
@@ -885,13 +898,168 @@ impl Cpu {
 
                     _ => panic!(),
                 },
-                StackInstruction::Rti => todo!(),
-                StackInstruction::Rts => todo!(),
-                StackInstruction::Pha => todo!(),
-                StackInstruction::Php => todo!(),
-                StackInstruction::Pla => todo!(),
-                StackInstruction::Plp => todo!(),
-                StackInstruction::Jsr => todo!(),
+                StackInstruction::Rti => match self.step {
+                    1 => {
+                        self.pc += 1;
+                        pins.addr = self.pc;
+                    }
+                    2 => {
+                        pins.addr = self.s as u16 + 0x100;
+                    }
+                    3 => {
+                        self.s.wrapping_add(1);
+                        pins.addr = self.s as u16 + 0x100;
+                    }
+                    4 => {
+                        self.s.wrapping_add(1);
+                        self.p = pins.data.into();
+                        pins.addr = self.s as u16 + 0x100;
+                    }
+                    5 => {
+                        self.s.wrapping_add(1);
+                        self.temp = pins.data;
+                        pins.addr = self.s as u16 + 0x100;
+                    }
+                    6 => {
+                        self.pc = (pins.data as u16) << 8 | self.temp as u16;
+                        pins.addr = self.pc;
+                        self.step = 0;
+                    }
+                    _ => panic!(),
+                },
+                StackInstruction::Rts => match self.step {
+                    1 => {
+                        self.pc += 1;
+                        pins.addr = self.pc;
+                    }
+                    2 => {
+                        pins.addr = self.s as u16 + 0x100;
+                    }
+                    3 => {
+                        self.s.wrapping_add(1);
+                        pins.addr = self.s as u16 + 0x100;
+                    }
+                    4 => {
+                        self.s.wrapping_add(1);
+                        self.temp = pins.data;
+                        pins.addr = self.s as u16 + 0x100;
+                    }
+                    5 => {
+                        self.pc = (pins.data as u16) << 8 | self.temp as u16;
+                        pins.addr = self.pc;
+                    }
+                    6 => {
+                        self.pc += 1;
+                        pins.addr = self.pc;
+                        self.step = 0;
+                    }
+                    _ => panic!(),
+                },
+                StackInstruction::Pha => match self.step {
+                    1 => {
+                        self.pc += 1;
+                        pins.addr = self.pc;
+                    }
+                    2 => {
+                        pins.addr = self.s as u16 + 0x100;
+                        pins.data = self.a;
+                        pins.write = true;
+                    }
+                    3 => {
+                        self.s.wrapping_sub(1);
+                        pins.addr = self.pc;
+                        self.step = 0;
+                    }
+                    _ => panic!()
+                },
+                StackInstruction::Php => match self.step {
+                    1 => {
+                        self.pc += 1;
+                        pins.addr = self.pc;
+                    }
+                    2 => {
+                        pins.addr = self.s as u16 + 0x100;
+                        pins.data = self.p.into();
+                        pins.write = true;
+                    }
+                    3 => {
+                        self.s.wrapping_sub(1);
+                        pins.addr = self.pc;
+                        self.step = 0;
+                    }
+                    _ => panic!()
+                },
+                StackInstruction::Pla => match self.step {
+                    1 => {
+                        self.pc += 1;
+                        pins.addr = self.pc;
+                    }
+                    2 => {
+                        pins.addr = self.s as u16 + 0x100;
+                    }
+                    3 => {
+                        self.s.wrapping_add(1);
+                        pins.addr = self.s as u16 + 0x100;
+                    }
+                    4 => {
+                        self.a = pins.data;
+                        pins.addr = self.pc;
+                        self.step = 0;
+                    }
+                    _ => panic!()
+                }
+                StackInstruction::Plp => match self.step {
+                    1 => {
+                        self.pc += 1;
+                        pins.addr = self.pc;
+                    }
+                    2 => {
+                        pins.addr = self.s as u16 + 0x100;
+                    }
+                    3 => {
+                        self.s.wrapping_add(1);
+                        pins.addr = self.s as u16 + 0x100;
+                    }
+                    4 => {
+                        self.p = pins.data.into();
+                        pins.addr = self.pc;
+                        self.step = 0;
+                    }
+                    _ => panic!()
+                }
+                StackInstruction::Jsr => match self.step {
+                    1 => {
+                        self.pc += 1;
+                        pins.addr = self.pc;
+                    }
+                    2 => {
+                        self.pc += 1;
+                        self.temp = pins.data;
+                        pins.addr = self.s as u16 + 0x100;
+                    }
+                    3 => {
+                        self.s.wrapping_sub(1);
+                        pins.addr = self.s as u16 + 0x100;
+                        pins.data = (self.pc & 0x00FF) as u8;
+                        pins.write = true;
+                    }
+                    4 => {
+                        self.s.wrapping_sub(1);
+                        pins.addr = self.s as u16 + 0x100;
+                        pins.data = ((self.pc & 0xFF00) >> 8) as u8;
+                        pins.write = true;
+                    }
+                    5 => {
+                        self.s.wrapping_sub(1);
+                        pins.addr = self.pc;
+                    }
+                    6 => {
+                        self.pc = (pins.data as u16) << 8 | pins.data as u16;
+                        pins.addr = self.pc;
+                        self.step = 0;
+                    }
+                    _ => panic!()
+                },
             },
             Instruction::AccumImpl(accum_impl_instruction) => match self.step {
                 1 => {
