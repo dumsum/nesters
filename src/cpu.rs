@@ -2,8 +2,6 @@
 
 use std::fmt::write;
 
-use log::debug;
-
 #[derive(Debug, Clone, Copy)]
 enum Instruction {
     Stack(StackInstruction),
@@ -837,7 +835,6 @@ impl Cpu {
                 StackInstruction::Brk(int) => match self.step {
                     1 => {
                         self.pc += 1;
-                        self.p.i = true;
                         pins.addr = self.pc;
                     }
                     2 => {
@@ -876,10 +873,12 @@ impl Cpu {
                             Interrupt::Rst => {}
                             Interrupt::Irq | Interrupt::Nmi => {
                                 pins.data = self.p.into();
+                                self.p.i = true;
                                 pins.write = true;
                             }
                             Interrupt::Brk => {
                                 pins.data = u8::from(self.p) | 1u8 << 4; //assert B with BRK
+                                self.p.i = true;
                                 pins.write = true;
                             }
                         }
@@ -1049,15 +1048,14 @@ impl Cpu {
                         pins.addr = self.s as u16 + 0x100;
                     }
                     3 => {
-                        //self.s = self.s.wrapping_sub(1);
                         pins.addr = self.s as u16 + 0x100;
-                        pins.data = (self.pc & 0x00FF) as u8;
+                        pins.data = ((self.pc & 0xFF00) >> 8) as u8;
                         pins.write = true;
                     }
                     4 => {
                         self.s = self.s.wrapping_sub(1);
                         pins.addr = self.s as u16 + 0x100;
-                        pins.data = ((self.pc & 0xFF00) >> 8) as u8;
+                        pins.data = (self.pc & 0x00FF) as u8;
                         pins.write = true;
                     }
                     5 => {
@@ -1276,6 +1274,7 @@ impl Cpu {
                             Instruction::ZeroPageIdxY(_) => self.y,
                             _ => unreachable!(),
                         } as u16;
+                        pins.addr &= 0x00FF;
                     }
                     4 => {
                         read_instruction.execute(self, pins.data);
@@ -1302,6 +1301,7 @@ impl Cpu {
                             Instruction::ZeroPageIdxY(_) => self.y,
                             _ => unreachable!(),
                         } as u16;
+                        pins.addr &= 0x00FF;
                         pins.data = write_instruction.execute(self);
                         pins.write = true;
                     }
@@ -1325,6 +1325,7 @@ impl Cpu {
                 }
                 3 => {
                     pins.addr += self.x as u16;
+                    pins.addr &= 0x00FF;
                 }
                 4 => {
                     self.temp = pins.data;
@@ -1355,18 +1356,22 @@ impl Cpu {
                     pins.addr = self.pc;
                 }
                 3 => {
-                    pins.addr = (pins.data as u16) << 8
-                        | self.temp.wrapping_add(match self.inst {
+                    self.pc += 1;
+                    let addr = (pins.data as u16) << 8 | (self.temp as u16);
+                    pins.addr = addr
+                        + match self.inst {
                             Instruction::AbsIdxX(_) => self.x,
                             Instruction::AbsIdxY(_) => self.y,
                             _ => unreachable!(),
-                        }) as u16;
+                        } as u16;
+                    if (addr & 0xFF00) != (pins.addr & 0xff00) {
+                        self.temp = 1;
+                    } else {
+                        self.temp = 0;
+                    }
                 }
                 4 => {
-                    let adl_idx = (pins.addr & 0x00FF) as u8;
-                    if adl_idx < self.temp {
-                        pins.addr += 0x100;
-                    } else {
+                    if self.temp == 0 {
                         read_instruction.execute(self, pins.data);
                         pins.addr = self.pc;
                         self.step = 0;
@@ -1392,19 +1397,18 @@ impl Cpu {
                         pins.addr = self.pc;
                     }
                     3 => {
-                        pins.addr = (pins.data as u16) << 8
-                            | self.temp.wrapping_add(match self.inst {
+                        self.pc += 1;
+                        let addr = (pins.data as u16) << 8 | (self.temp as u16);
+                        pins.addr = addr
+                            + match self.inst {
                                 Instruction::AbsIdxX(_) => self.x,
                                 Instruction::AbsIdxY(_) => self.y,
                                 _ => unreachable!(),
-                            }) as u16;
+                            } as u16;
                     }
                     4 => {
-                        let adl_idx = (pins.addr & 0x00FF) as u8;
-                        if adl_idx < self.temp {
-                            pins.addr += 0x100;
-                        }
                         pins.data = write_instruction.execute(self);
+                        pins.write = true;
                     }
                     5 => {
                         pins.addr = self.pc;
@@ -1668,7 +1672,7 @@ mod tests {
         pins.addr = 0x400;
         pins.data = ram[0x400];
 
-        for total_cycles in 0u64..84000 {
+        for total_cycles in 0u64..88000 {
             println!(
                 "Cycle {}: AddrBus: {:#06x}, DataBus: {:#04x}, R/W: {}, PC: {:#06x}, IR: {:x?}, Step: {}, SP: {:#04x}, A: {:#04x}, X: {:#04x}, Y: {:#04x}, P: {}",
                 total_cycles, pins.addr, pins.data, if pins.write {'W'} else {'R'}, cpu.pc, cpu.inst, cpu.step, cpu.s, cpu.a, cpu.x, cpu.y, cpu.p
