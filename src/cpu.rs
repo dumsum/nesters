@@ -242,22 +242,31 @@ impl ReadInstruction {
                 cpu.p.set_z(cpu.a);
             }
             ReadInstruction::Cmp => {
-                cpu.p.set_c((cpu.a as u16).wrapping_sub(m as u16));
-                let r = cpu.a.wrapping_sub(m);
-                cpu.p.set_n(r);
-                cpu.p.set_z(r);
+                let c = 1u8;
+                let m = !m;
+                let a = cpu.a.wrapping_add(m).wrapping_add(c);
+
+                cpu.p.set_c(cpu.a as u16 + m as u16 + c as u16);
+                cpu.p.set_n(a);
+                cpu.p.set_z(a);
             }
             ReadInstruction::Cpy => {
-                cpu.p.set_c((cpu.y as u16).wrapping_sub(m as u16));
-                let r = cpu.y.wrapping_sub(m);
-                cpu.p.set_n(r);
-                cpu.p.set_z(r);
+                let c = 1u8;
+                let m = !m;
+                let y = cpu.y.wrapping_add(m).wrapping_add(c);
+
+                cpu.p.set_c(cpu.y as u16 + m as u16 + c as u16);
+                cpu.p.set_n(y);
+                cpu.p.set_z(y);
             }
             ReadInstruction::Cpx => {
-                cpu.p.set_c((cpu.x as u16).wrapping_sub(m as u16));
-                let r = cpu.x.wrapping_sub(m);
-                cpu.p.set_n(r);
-                cpu.p.set_z(r);
+                let c = 1u8;
+                let m = !m;
+                let x = cpu.x.wrapping_add(m).wrapping_add(c);
+
+                cpu.p.set_c(cpu.x as u16 + m as u16 + c as u16);
+                cpu.p.set_n(x);
+                cpu.p.set_z(x);
             }
             ReadInstruction::Bit => {
                 cpu.p.set_z(cpu.a & m);
@@ -440,13 +449,13 @@ impl Default for Cpu {
     }
 }
 
-struct Pins {
-    addr: u16,
-    data: u8,
-    write: bool,
-    rst: bool,
-    nmi: bool,
-    irq: bool,
+pub struct Pins {
+    pub addr: u16,
+    pub data: u8,
+    pub write: bool,
+    pub rst: bool,
+    pub nmi: bool,
+    pub irq: bool,
 }
 
 impl Default for Pins {
@@ -554,7 +563,7 @@ impl From<u8> for Flags {
 }
 
 impl Cpu {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Cpu::default()
     }
 
@@ -807,7 +816,7 @@ impl Cpu {
         }
     }
 
-    fn clock(&mut self, pins: &mut Pins) {
+    pub fn clock(&mut self, pins: &mut Pins) {
         if self.step == 0 || pins.rst || pins.nmi || pins.irq {
             self.inst = if pins.rst {
                 Instruction::Stack(StackInstruction::Brk(Interrupt::Rst))
@@ -907,16 +916,16 @@ impl Cpu {
                         pins.addr = self.s as u16 + 0x100;
                     }
                     3 => {
-                        self.s.wrapping_add(1);
+                        self.s = self.s.wrapping_add(1);
                         pins.addr = self.s as u16 + 0x100;
                     }
                     4 => {
-                        self.s.wrapping_add(1);
+                        self.s = self.s.wrapping_add(1);
                         self.p = pins.data.into();
                         pins.addr = self.s as u16 + 0x100;
                     }
                     5 => {
-                        self.s.wrapping_add(1);
+                        self.s = self.s.wrapping_add(1);
                         self.temp = pins.data;
                         pins.addr = self.s as u16 + 0x100;
                     }
@@ -936,11 +945,11 @@ impl Cpu {
                         pins.addr = self.s as u16 + 0x100;
                     }
                     3 => {
-                        self.s.wrapping_add(1);
+                        self.s = self.s.wrapping_add(1);
                         pins.addr = self.s as u16 + 0x100;
                     }
                     4 => {
-                        self.s.wrapping_add(1);
+                        self.s = self.s.wrapping_add(1);
                         self.temp = pins.data;
                         pins.addr = self.s as u16 + 0x100;
                     }
@@ -966,11 +975,11 @@ impl Cpu {
                         pins.write = true;
                     }
                     3 => {
-                        self.s.wrapping_sub(1);
+                        self.s = self.s.wrapping_sub(1);
                         pins.addr = self.pc;
                         self.step = 0;
                     }
-                    _ => panic!()
+                    _ => panic!(),
                 },
                 StackInstruction::Php => match self.step {
                     1 => {
@@ -979,15 +988,15 @@ impl Cpu {
                     }
                     2 => {
                         pins.addr = self.s as u16 + 0x100;
-                        pins.data = self.p.into();
+                        pins.data = u8::from(self.p) | (1u8 << 4); // assert B for PHP
                         pins.write = true;
                     }
                     3 => {
-                        self.s.wrapping_sub(1);
+                        self.s = self.s.wrapping_sub(1);
                         pins.addr = self.pc;
                         self.step = 0;
                     }
-                    _ => panic!()
+                    _ => panic!(),
                 },
                 StackInstruction::Pla => match self.step {
                     1 => {
@@ -998,16 +1007,18 @@ impl Cpu {
                         pins.addr = self.s as u16 + 0x100;
                     }
                     3 => {
-                        self.s.wrapping_add(1);
+                        self.s = self.s.wrapping_add(1);
                         pins.addr = self.s as u16 + 0x100;
                     }
                     4 => {
                         self.a = pins.data;
+                        self.p.set_n(self.a);
+                        self.p.set_z(self.a);
                         pins.addr = self.pc;
                         self.step = 0;
                     }
-                    _ => panic!()
-                }
+                    _ => panic!(),
+                },
                 StackInstruction::Plp => match self.step {
                     1 => {
                         self.pc += 1;
@@ -1017,7 +1028,7 @@ impl Cpu {
                         pins.addr = self.s as u16 + 0x100;
                     }
                     3 => {
-                        self.s.wrapping_add(1);
+                        self.s = self.s.wrapping_add(1);
                         pins.addr = self.s as u16 + 0x100;
                     }
                     4 => {
@@ -1025,8 +1036,8 @@ impl Cpu {
                         pins.addr = self.pc;
                         self.step = 0;
                     }
-                    _ => panic!()
-                }
+                    _ => panic!(),
+                },
                 StackInstruction::Jsr => match self.step {
                     1 => {
                         self.pc += 1;
@@ -1038,27 +1049,27 @@ impl Cpu {
                         pins.addr = self.s as u16 + 0x100;
                     }
                     3 => {
-                        self.s.wrapping_sub(1);
+                        //self.s = self.s.wrapping_sub(1);
                         pins.addr = self.s as u16 + 0x100;
                         pins.data = (self.pc & 0x00FF) as u8;
                         pins.write = true;
                     }
                     4 => {
-                        self.s.wrapping_sub(1);
+                        self.s = self.s.wrapping_sub(1);
                         pins.addr = self.s as u16 + 0x100;
                         pins.data = ((self.pc & 0xFF00) >> 8) as u8;
                         pins.write = true;
                     }
                     5 => {
-                        self.s.wrapping_sub(1);
+                        self.s = self.s.wrapping_sub(1);
                         pins.addr = self.pc;
                     }
                     6 => {
-                        self.pc = (pins.data as u16) << 8 | pins.data as u16;
+                        self.pc = (pins.data as u16) << 8 | self.temp as u16;
                         pins.addr = self.pc;
                         self.step = 0;
                     }
-                    _ => panic!()
+                    _ => panic!(),
                 },
             },
             Instruction::AccumImpl(accum_impl_instruction) => match self.step {
@@ -1449,10 +1460,14 @@ impl Cpu {
                     self.pc += 1;
                     self.temp = pins.data;
                     if branch_instruction.execute(self) {
-                        let pch = (self.pc & 0xFF00);
-                        let pcl = (self.pc & 0x00FF) as u8;
-                        let pcl = pcl.wrapping_add(self.temp);
-                        self.pc = pch & pcl as u16;
+                        let j = (self.temp as i8) as i16;
+                        let pc = self.pc.wrapping_add_signed(j);
+                        self.temp = if (pc & 0xFF00) != (self.pc & 0xFF00) {
+                            1
+                        } else {
+                            0
+                        };
+                        self.pc = pc;
                     } else {
                         self.step = 0;
                     }
@@ -1460,9 +1475,7 @@ impl Cpu {
                 }
                 3 => {
                     let pcl = (pins.addr & 0x00FF) as u8;
-                    if pcl < self.temp {
-                        self.pc += 0x100;
-                    } else {
+                    if self.temp == 0 {
                         self.step = 0;
                     }
                     pins.addr = self.pc;
@@ -1580,9 +1593,6 @@ impl Cpu {
                     let adl_idx = (pins.addr & 0x00FF) as u8;
                     if adl_idx < self.temp {
                         pins.addr += 0x100;
-                    } else {
-                        pins.addr = self.pc;
-                        self.step = 0;
                     }
                     pins.data = write_instruction.execute(self);
                     pins.write = true;
@@ -1612,7 +1622,7 @@ impl Cpu {
                     let adh = pins.addr & 0xFF00;
                     let adl = (pins.addr & 0x00FF) as u8;
                     let adl = adl.wrapping_add(1);
-                    pins.addr = adh & adl as u16;
+                    pins.addr = adh | adl as u16;
                 }
                 5 => {
                     self.pc = (pins.data as u16) << 8 | self.temp as u16;
@@ -1621,69 +1631,54 @@ impl Cpu {
                 }
                 _ => panic!(),
             },
-            Instruction::Invalid(op) => panic!("Invalid Instruction {op}"),
+            Instruction::Invalid(op) => panic!("Invalid Instruction {op:#04x}"),
         };
     }
 }
 
-fn main() {
-    env_logger::init();
-    let mut cpu = Cpu::new();
-    let mut pins = Pins::new();
-    pins.rst = true;
-    let mut ram = [0u8; 0x10000];
+mod tests {
+    use super::*;
+    use std::fs::File;
+    use std::io::prelude::*;
+    use std::path::Path;
 
-    ram[0xfffc] = 0x34;
-    ram[0xfffd] = 0x12;
-    ram[0x1234] = 0xA9;
-    ram[0x1235] = 0xEE;
-    ram[0x1236] = 0xA2;
-    ram[0x1237] = 0xEF;
-    ram[0x1238] = 0xA0;
-    ram[0x1239] = 0xF0;
-    ram[0x123A] = 0x0A;
-    ram[0x123B] = 0x0A;
-    ram[0x123C] = 0x0A;
-    ram[0x123D] = 0x0A;
-    ram[0x123E] = 0x0A;
-    ram[0x123F] = 0x0A;
-    ram[0x1240] = 0xC8;
-    ram[0x1241] = 0x4C;
-    ram[0x1242] = 0x78;
-    ram[0x1243] = 0x56;
-    ram[0x5678] = 0xAE;
-    ram[0x5679] = 0x66;
-    ram[0x567A] = 0x66;
-    ram[0x567B] = 0x8E;
-    ram[0x567C] = 0x77;
-    ram[0x567D] = 0x77;
-    ram[0x567E] = 0xAC;
-    ram[0x567F] = 0x77;
-    ram[0x5680] = 0x77;
-    ram[0x5681] = 0xEE;
-    ram[0x5682] = 0x77;
-    ram[0x5683] = 0x77;
-    ram[0x5684] = 0xAD;
-    ram[0x5685] = 0x77;
-    ram[0x5686] = 0x77;
-    ram[0x5687] = 0xA6;
-    ram[0x5688] = 0x13;
-    ram[0x0013] = 0x24;
-    ram[0x6666] = 0x98;
+    #[test]
+    fn _6502_functional_test() {
+        let mut ram = [0u8; 0x10000];
 
-    for total_cycles in 0u64..56u64 {
-        debug!(
-            "Cycle {}: AddrBus: {:#06x}, DataBus: {:#04x}, R/W: {}, PC: {:#06x}, IR: {:x?}, Step: {}, SP: {:#04x}, A: {:#04x}, X: {:#04x}, Y: {:#04x}, P: {}",
-            total_cycles, pins.addr, pins.data, if pins.write {'W'} else {'R'}, cpu.pc, cpu.inst, cpu.step, cpu.s, cpu.a, cpu.x, cpu.y, cpu.p
-        );
-        cpu.clock(&mut pins);
-        if pins.write {
-            ram[pins.addr as usize] = pins.data;
-        } else {
-            pins.data = ram[pins.addr as usize];
+        let path = Path::new("data/6502_functional_test.bin");
+        let mut file = match File::open(path) {
+            Ok(file) => file,
+            Err(why) => panic!("Couldn't open {}: {}", path.display(), why),
+        };
+
+        match file.read(&mut ram) {
+            Ok(n) => println!("Read {n:#06x} bytes"),
+            Err(why) => panic!("Couldn't read {}: {}", path.display(), why),
         }
+
+        let mut cpu = Cpu::new();
+        let mut pins = Pins::new();
+
+        cpu.pc = 0x400;
+        cpu.step = 0;
         pins.rst = false;
         pins.nmi = false;
         pins.irq = false;
+        pins.addr = 0x400;
+        pins.data = ram[0x400];
+
+        for total_cycles in 0u64..84000 {
+            println!(
+                "Cycle {}: AddrBus: {:#06x}, DataBus: {:#04x}, R/W: {}, PC: {:#06x}, IR: {:x?}, Step: {}, SP: {:#04x}, A: {:#04x}, X: {:#04x}, Y: {:#04x}, P: {}",
+                total_cycles, pins.addr, pins.data, if pins.write {'W'} else {'R'}, cpu.pc, cpu.inst, cpu.step, cpu.s, cpu.a, cpu.x, cpu.y, cpu.p
+            );
+            cpu.clock(&mut pins);
+            if pins.write {
+                ram[pins.addr as usize] = pins.data;
+            } else {
+                pins.data = ram[pins.addr as usize];
+            }
+        }
     }
 }
