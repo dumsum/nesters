@@ -1,7 +1,3 @@
-#![allow(unused)]
-
-use std::fmt::write;
-
 #[derive(Debug, Clone, Copy)]
 enum Instruction {
     Stack(StackInstruction),
@@ -447,7 +443,7 @@ enum AbsIndInstruction {
     Jump(JumpInstruction),
 }
 
-struct Cpu {
+pub struct Cpu {
     step: u8,
     pc: u16,
     s: u8,
@@ -471,119 +467,6 @@ impl Default for Cpu {
             p: Default::default(),
             inst: Cpu::decode(rand::random()),
             temp: rand::random(),
-        }
-    }
-}
-
-pub struct Pins {
-    pub addr: u16,
-    pub data: u8,
-    pub write: bool,
-    pub rst: bool,
-    pub nmi: bool,
-    pub irq: bool,
-}
-
-impl Default for Pins {
-    fn default() -> Self {
-        Self {
-            addr: rand::random(),
-            data: rand::random(),
-            write: rand::random(),
-            rst: rand::random(),
-            nmi: rand::random(),
-            irq: rand::random(),
-        }
-    }
-}
-
-impl Pins {
-    fn new() -> Self {
-        Pins::default()
-    }
-}
-
-#[derive(Clone, Copy)]
-struct Flags {
-    n: bool,
-    v: bool,
-    d: bool,
-    i: bool,
-    z: bool,
-    c: bool,
-}
-
-impl std::fmt::Display for Flags {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}{}-B{}{}{}{}",
-            if self.n { 'N' } else { 'n' },
-            if self.v { 'V' } else { 'v' },
-            if self.d { 'D' } else { 'd' },
-            if self.i { 'I' } else { 'i' },
-            if self.z { 'Z' } else { 'z' },
-            if self.c { 'C' } else { 'c' }
-        )
-    }
-}
-
-impl Default for Flags {
-    fn default() -> Self {
-        Self {
-            n: rand::random(),
-            v: rand::random(),
-            d: rand::random(),
-            i: rand::random(),
-            z: rand::random(),
-            c: rand::random(),
-        }
-    }
-}
-
-impl Flags {
-    fn set_z(&mut self, m: u8) {
-        self.z = m == 0;
-    }
-
-    fn set_n(&mut self, m: u8) {
-        self.n = (m as i8) < 0;
-    }
-
-    fn set_c(&mut self, m: u16) {
-        self.c = m > 0xFF;
-    }
-
-    fn set_v(&mut self, a: u8, m: u8, c: u8) {
-        let isum = (a as i8 as i16) + (m as i8 as i16) + (c as i8 as i16);
-        self.v = !(-128..=127).contains(&isum);
-    }
-}
-
-impl From<Flags> for u8 {
-    fn from(p: Flags) -> Self {
-        let n = if p.n { 1u8 << 7 } else { 0u8 };
-        let v = if p.v { 1u8 << 6 } else { 0u8 };
-        let u = 1u8 << 5;
-        let b = 0u8;
-        let d = if p.d { 1u8 << 3 } else { 0u8 };
-        let i = if p.i { 1u8 << 2 } else { 0u8 };
-        let z = if p.z { 1u8 << 1 } else { 0u8 };
-        let c = if p.c { 1u8 << 0 } else { 0u8 };
-
-        n | v | u | b | d | i | z | c
-    }
-}
-
-impl From<u8> for Flags {
-    fn from(value: u8) -> Self {
-        Self {
-            n: value & (1 << 7) != 0,
-            v: value & (1 << 6) != 0,
-            d: value & (1 << 3) != 0,
-            i: value & (1 << 2) != 0,
-            z: value & (1 << 1) != 0,
-            c: value & (1 << 0) != 0,
         }
     }
 }
@@ -1135,7 +1018,7 @@ impl Cpu {
 
                 _ => panic!(),
             },
-            Instruction::Abs(AbsInstruction::Jump(jump_instruction)) => match self.step {
+            Instruction::Abs(AbsInstruction::Jump(_)) => match self.step {
                 1 => {
                     self.pc += 1;
                     pins.addr = self.pc;
@@ -1285,8 +1168,8 @@ impl Cpu {
                 }
                 _ => panic!(),
             },
-            (Instruction::ZeroPageIdxX(ZeroPageIdxInstruction::Read(read_instruction))
-            | Instruction::ZeroPageIdxY(ZeroPageIdxInstruction::Read(read_instruction))) => {
+            Instruction::ZeroPageIdxX(ZeroPageIdxInstruction::Read(read_instruction))
+            | Instruction::ZeroPageIdxY(ZeroPageIdxInstruction::Read(read_instruction)) => {
                 match self.step {
                     1 => {
                         self.pc += 1;
@@ -1312,8 +1195,8 @@ impl Cpu {
                     _ => panic!(),
                 }
             }
-            (Instruction::ZeroPageIdxX(ZeroPageIdxInstruction::Write(write_instruction))
-            | Instruction::ZeroPageIdxY(ZeroPageIdxInstruction::Write(write_instruction))) => {
+            Instruction::ZeroPageIdxX(ZeroPageIdxInstruction::Write(write_instruction))
+            | Instruction::ZeroPageIdxY(ZeroPageIdxInstruction::Write(write_instruction)) => {
                 match self.step {
                     1 => {
                         self.pc += 1;
@@ -1340,9 +1223,9 @@ impl Cpu {
                     _ => panic!(),
                 }
             }
-            (Instruction::ZeroPageIdxX(ZeroPageIdxInstruction::ReadModifyWrite(
+            Instruction::ZeroPageIdxX(ZeroPageIdxInstruction::ReadModifyWrite(
                 read_modify_write_instruction,
-            ))) => match self.step {
+            )) => match self.step {
                 1 => {
                     self.pc += 1;
                     pins.addr = self.pc;
@@ -1369,9 +1252,7 @@ impl Cpu {
                 }
                 _ => panic!(),
             },
-            (Instruction::ZeroPageIdxY(ZeroPageIdxInstruction::ReadModifyWrite(_))) => {
-                unreachable!()
-            }
+            Instruction::ZeroPageIdxY(ZeroPageIdxInstruction::ReadModifyWrite(_)) => unreachable!(),
             Instruction::AbsIdxX(AbsIdxInstruction::Read(read_instruction))
             | Instruction::AbsIdxY(AbsIdxInstruction::Read(read_instruction)) => match self.step {
                 1 => {
@@ -1473,7 +1354,6 @@ impl Cpu {
                     }
                 }
                 4 => {
-                    let adl_idx = (pins.addr & 0x00FF) as u8;
                     if self.temp != 0 {
                         pins.addr += 0x100;
                     }
@@ -1518,7 +1398,6 @@ impl Cpu {
                     pins.addr = self.pc;
                 }
                 3 => {
-                    let pcl = (pins.addr & 0x00FF) as u8;
                     if self.temp == 0 {
                         self.step = 0;
                     }
@@ -1684,6 +1563,120 @@ impl Cpu {
     }
 }
 
+pub struct Pins {
+    addr: u16,
+    data: u8,
+    write: bool,
+    rst: bool,
+    nmi: bool,
+    irq: bool,
+}
+
+impl Default for Pins {
+    fn default() -> Self {
+        Self {
+            addr: rand::random(),
+            data: rand::random(),
+            write: rand::random(),
+            rst: rand::random(),
+            nmi: rand::random(),
+            irq: rand::random(),
+        }
+    }
+}
+
+impl Pins {
+    pub fn new() -> Self {
+        Pins::default()
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Flags {
+    n: bool,
+    v: bool,
+    d: bool,
+    i: bool,
+    z: bool,
+    c: bool,
+}
+
+impl std::fmt::Display for Flags {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}{}-B{}{}{}{}",
+            if self.n { 'N' } else { 'n' },
+            if self.v { 'V' } else { 'v' },
+            if self.d { 'D' } else { 'd' },
+            if self.i { 'I' } else { 'i' },
+            if self.z { 'Z' } else { 'z' },
+            if self.c { 'C' } else { 'c' }
+        )
+    }
+}
+
+impl Default for Flags {
+    fn default() -> Self {
+        Self {
+            n: rand::random(),
+            v: rand::random(),
+            d: rand::random(),
+            i: rand::random(),
+            z: rand::random(),
+            c: rand::random(),
+        }
+    }
+}
+
+impl Flags {
+    fn set_z(&mut self, m: u8) {
+        self.z = m == 0;
+    }
+
+    fn set_n(&mut self, m: u8) {
+        self.n = (m as i8) < 0;
+    }
+
+    fn set_c(&mut self, m: u16) {
+        self.c = m > 0xFF;
+    }
+
+    fn set_v(&mut self, a: u8, m: u8, c: u8) {
+        let isum = (a as i8 as i16) + (m as i8 as i16) + (c as i8 as i16);
+        self.v = !(-128..=127).contains(&isum);
+    }
+}
+
+impl From<Flags> for u8 {
+    fn from(p: Flags) -> Self {
+        let n = if p.n { 1u8 << 7 } else { 0u8 };
+        let v = if p.v { 1u8 << 6 } else { 0u8 };
+        let u = 1u8 << 5;
+        let b = 0u8;
+        let d = if p.d { 1u8 << 3 } else { 0u8 };
+        let i = if p.i { 1u8 << 2 } else { 0u8 };
+        let z = if p.z { 1u8 << 1 } else { 0u8 };
+        let c = if p.c { 1u8 << 0 } else { 0u8 };
+
+        n | v | u | b | d | i | z | c
+    }
+}
+
+impl From<u8> for Flags {
+    fn from(value: u8) -> Self {
+        Self {
+            n: value & (1 << 7) != 0,
+            v: value & (1 << 6) != 0,
+            d: value & (1 << 3) != 0,
+            i: value & (1 << 2) != 0,
+            z: value & (1 << 1) != 0,
+            c: value & (1 << 0) != 0,
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::fs::File;
