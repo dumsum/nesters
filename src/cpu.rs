@@ -245,9 +245,13 @@ impl ReadInstruction {
                 let c = if cpu.p.c { 1u8 } else { 0u8 };
                 let a = cpu.a;
                 if cpu.p.d {
-                    let al = (a & 0x0F) as u16 - (m & 0x0F) as u16 - (1 - c) as u16;
+                    let al = ((a & 0x0F) as u16)
+                        .wrapping_sub((m & 0x0F) as u16)
+                        .wrapping_sub((1 - c) as u16);
                     let al = al - if al & 0x10 != 0 { 6 } else { 0 };
-                    let ah = (a >> 4) as u16 - (m>> 4) as u16 - if al & 0x10 != 0 {1} else {0};
+                    let ah = ((a >> 4) as u16)
+                        .wrapping_sub((m >> 4) as u16)
+                        .wrapping_sub(if al & 0x10 != 0 { 1 } else { 0 });
                     let ah = ah - if ah & 0x10 != 0 { 6 } else { 0 };
                     cpu.p.set_c(a as u16 + !m as u16 + c as u16);
                     cpu.p.set_v(a, !m, c);
@@ -1697,7 +1701,7 @@ mod tests {
         };
 
         match file.read(&mut ram) {
-            Ok(n) => println!("Read {n:#06x} bytes"),
+            Ok(n) => assert_eq!(n, 0x10000),
             Err(why) => panic!("Couldn't read {}: {}", path.display(), why),
         }
 
