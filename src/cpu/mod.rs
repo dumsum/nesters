@@ -1,5 +1,6 @@
 mod flags;
 mod instruction;
+use super::bus::Bus;
 use flags::*;
 use instruction::*;
 
@@ -14,6 +15,9 @@ pub struct Cpu {
     p: Flags,
     inst: Instruction,
     temp: u8,
+    irq: bool,
+    nmi: bool,
+    rst: bool,
 }
 
 impl Cpu {
@@ -21,25 +25,39 @@ impl Cpu {
         Cpu::default()
     }
 
-    pub fn clock(&mut self, pins: &mut Pins) {
-        if self.step == 0 || pins.rst || pins.nmi || pins.irq {
-            self.inst = if pins.rst {
+    pub fn rst(&mut self) {
+        self.rst = true;
+    }
+
+    pub fn irq(&mut self) {
+        if !self.p.i {
+            self.irq = true;
+        }
+    }
+
+    pub fn nmi(&mut self) {
+        self.nmi = true;
+    }
+
+    /// Advances the CPU by one clock cycle. Returns true when bus action is read.
+    pub fn clock(&mut self, bus: &mut Bus) -> bool {
+        if self.step == 0 {
+            self.inst = if self.rst {
                 Instruction::Stack(StackInstruction::Brk(Interrupt::Rst))
-            } else if pins.nmi {
+            } else if self.nmi {
                 Instruction::Stack(StackInstruction::Brk(Interrupt::Nmi))
-            } else if pins.irq {
+            } else if self.irq {
                 Instruction::Stack(StackInstruction::Brk(Interrupt::Irq))
             } else {
-                pins.data.into()
+                bus.data.into()
             };
         }
 
         self.step += 1;
-        pins.write = false;
 
         if self.step == 1 {
             self.pc += 1;
-            pins.addr = self.pc;
+            bus.addr = self.pc;
         } else {
             match self.inst {
                 Instruction::Stack(stack_instruction) => match stack_instruction {
@@ -50,172 +68,177 @@ impl Cpu {
                                 Interrupt::Nmi | Interrupt::Irq => 0,
                             };
 
-                            pins.addr = 0x100 | self.s as u16;
+                            bus.addr = 0x100 | self.s as u16;
                             self.s = self.s.wrapping_sub(1);
 
                             match int {
                                 Interrupt::Rst => {}
                                 Interrupt::Irq | Interrupt::Nmi | Interrupt::Brk => {
-                                    pins.data = ((self.pc & 0xFF00) >> 8) as u8;
-                                    pins.write = true;
+                                    bus.data = ((self.pc & 0xFF00) >> 8) as u8;
+                                    return false;
                                 }
                             }
                         }
                         3 => {
-                            pins.addr = 0x100 | self.s as u16;
+                            bus.addr = 0x100 | self.s as u16;
                             self.s = self.s.wrapping_sub(1);
 
                             match int {
                                 Interrupt::Rst => {}
                                 Interrupt::Irq | Interrupt::Nmi | Interrupt::Brk => {
-                                    pins.data = (self.pc & 0x00FF) as u8;
-                                    pins.write = true;
+                                    bus.data = (self.pc & 0x00FF) as u8;
+                                    return false;
                                 }
                             }
                         }
                         4 => {
-                            pins.addr = 0x100 | self.s as u16;
+                            bus.addr = 0x100 | self.s as u16;
                             self.s = self.s.wrapping_sub(1);
                             match int {
                                 Interrupt::Rst => {}
                                 Interrupt::Irq | Interrupt::Nmi => {
-                                    pins.data = self.p.into();
+                                    bus.data = self.p.into();
                                     self.p.i = true;
-                                    pins.write = true;
+                                    return false;
                                 }
                                 Interrupt::Brk => {
-                                    pins.data = u8::from(self.p) | 1u8 << 4; //assert B with BRK
+                                    bus.data = u8::from(self.p) | 1u8 << 4; //assert B with BRK
                                     self.p.i = true;
-                                    pins.write = true;
+                                    return false;
                                 }
                             }
                         }
                         5 => {
-                            pins.addr = match int {
+                            bus.addr = match int {
                                 Interrupt::Brk | Interrupt::Irq => 0xFFFE,
                                 Interrupt::Nmi => 0xFFFA,
                                 Interrupt::Rst => 0xFFFC,
                             }
                         }
                         6 => {
-                            self.temp = pins.data;
-                            pins.addr = match int {
+                            self.temp = bus.data;
+                            bus.addr = match int {
                                 Interrupt::Brk | Interrupt::Irq => 0xFFFF,
                                 Interrupt::Nmi => 0xFFFB,
                                 Interrupt::Rst => 0xFFFD,
                             };
                         }
                         7 => {
-                            self.pc = (pins.data as u16) << 8 | self.temp as u16;
-                            pins.addr = self.pc;
+                            self.pc = (bus.data as u16) << 8 | self.temp as u16;
+                            bus.addr = self.pc;
+
+                            match int {
+                                Interrupt::Rst => self.rst = false,
+                                Interrupt::Nmi => self.nmi = false,
+                                _ => {}
+                            }
                             self.step = 0;
                         }
-
                         _ => unreachable!(),
                     },
                     StackInstruction::Rti => match self.step {
                         2 => {
-                            pins.addr = self.s as u16 + 0x100;
+                            bus.addr = self.s as u16 + 0x100;
                         }
                         3 => {
                             self.s = self.s.wrapping_add(1);
-                            pins.addr = self.s as u16 + 0x100;
+                            bus.addr = self.s as u16 + 0x100;
                         }
                         4 => {
                             self.s = self.s.wrapping_add(1);
-                            self.p = pins.data.into();
-                            pins.addr = self.s as u16 + 0x100;
+                            self.p = bus.data.into();
+                            bus.addr = self.s as u16 + 0x100;
                         }
                         5 => {
                             self.s = self.s.wrapping_add(1);
-                            self.temp = pins.data;
-                            pins.addr = self.s as u16 + 0x100;
+                            self.temp = bus.data;
+                            bus.addr = self.s as u16 + 0x100;
                         }
                         6 => {
-                            self.pc = (pins.data as u16) << 8 | self.temp as u16;
-                            pins.addr = self.pc;
+                            self.pc = (bus.data as u16) << 8 | self.temp as u16;
+                            bus.addr = self.pc;
                             self.step = 0;
                         }
                         _ => unreachable!(),
                     },
                     StackInstruction::Rts => match self.step {
                         2 => {
-                            pins.addr = self.s as u16 + 0x100;
+                            bus.addr = self.s as u16 + 0x100;
                         }
                         3 => {
                             self.s = self.s.wrapping_add(1);
-                            pins.addr = self.s as u16 + 0x100;
+                            bus.addr = self.s as u16 + 0x100;
                         }
                         4 => {
                             self.s = self.s.wrapping_add(1);
-                            self.temp = pins.data;
-                            pins.addr = self.s as u16 + 0x100;
+                            self.temp = bus.data;
+                            bus.addr = self.s as u16 + 0x100;
                         }
                         5 => {
-                            self.pc = (pins.data as u16) << 8 | self.temp as u16;
-                            pins.addr = self.pc;
+                            self.pc = (bus.data as u16) << 8 | self.temp as u16;
+                            bus.addr = self.pc;
                         }
                         6 => {
                             self.pc += 1;
-                            pins.addr = self.pc;
+                            bus.addr = self.pc;
                             self.step = 0;
                         }
                         _ => unreachable!(),
                     },
                     StackInstruction::Pha => match self.step {
                         2 => {
-                            pins.addr = self.s as u16 + 0x100;
-                            pins.data = self.a;
-                            pins.write = true;
+                            bus.addr = self.s as u16 + 0x100;
+                            bus.data = self.a;
+                            return false;
                         }
                         3 => {
                             self.s = self.s.wrapping_sub(1);
-                            pins.addr = self.pc;
+                            bus.addr = self.pc;
                             self.step = 0;
                         }
                         _ => unreachable!(),
                     },
                     StackInstruction::Php => match self.step {
                         2 => {
-                            pins.addr = self.s as u16 + 0x100;
-                            pins.data = u8::from(self.p) | (1u8 << 4); // assert B for PHP
-                            pins.write = true;
+                            bus.addr = self.s as u16 + 0x100;
+                            bus.data = u8::from(self.p) | (1u8 << 4); // assert B for PHP
+                            return false;
                         }
                         3 => {
                             self.s = self.s.wrapping_sub(1);
-                            pins.addr = self.pc;
+                            bus.addr = self.pc;
                             self.step = 0;
                         }
                         _ => unreachable!(),
                     },
                     StackInstruction::Pla => match self.step {
                         2 => {
-                            pins.addr = self.s as u16 + 0x100;
+                            bus.addr = self.s as u16 + 0x100;
                         }
                         3 => {
                             self.s = self.s.wrapping_add(1);
-                            pins.addr = self.s as u16 + 0x100;
+                            bus.addr = self.s as u16 + 0x100;
                         }
                         4 => {
-                            self.a = pins.data;
+                            self.a = bus.data;
                             self.p.set_n(self.a);
                             self.p.set_z(self.a);
-                            pins.addr = self.pc;
+                            bus.addr = self.pc;
                             self.step = 0;
                         }
                         _ => unreachable!(),
                     },
                     StackInstruction::Plp => match self.step {
                         2 => {
-                            pins.addr = self.s as u16 + 0x100;
+                            bus.addr = self.s as u16 + 0x100;
                         }
                         3 => {
                             self.s = self.s.wrapping_add(1);
-                            pins.addr = self.s as u16 + 0x100;
+                            bus.addr = self.s as u16 + 0x100;
                         }
                         4 => {
-                            self.p = pins.data.into();
-                            pins.addr = self.pc;
+                            self.p = bus.data.into();
+                            bus.addr = self.pc;
                             self.step = 0;
                         }
                         _ => unreachable!(),
@@ -223,27 +246,27 @@ impl Cpu {
                     StackInstruction::Jsr => match self.step {
                         2 => {
                             self.pc += 1;
-                            self.temp = pins.data;
-                            pins.addr = self.s as u16 + 0x100;
+                            self.temp = bus.data;
+                            bus.addr = self.s as u16 + 0x100;
                         }
                         3 => {
-                            pins.addr = self.s as u16 + 0x100;
-                            pins.data = ((self.pc & 0xFF00) >> 8) as u8;
-                            pins.write = true;
+                            bus.addr = self.s as u16 + 0x100;
+                            bus.data = ((self.pc & 0xFF00) >> 8) as u8;
+                            return false;
                         }
                         4 => {
                             self.s = self.s.wrapping_sub(1);
-                            pins.addr = self.s as u16 + 0x100;
-                            pins.data = (self.pc & 0x00FF) as u8;
-                            pins.write = true;
+                            bus.addr = self.s as u16 + 0x100;
+                            bus.data = (self.pc & 0x00FF) as u8;
+                            return false;
                         }
                         5 => {
                             self.s = self.s.wrapping_sub(1);
-                            pins.addr = self.pc;
+                            bus.addr = self.pc;
                         }
                         6 => {
-                            self.pc = (pins.data as u16) << 8 | self.temp as u16;
-                            pins.addr = self.pc;
+                            self.pc = (bus.data as u16) << 8 | self.temp as u16;
+                            bus.addr = self.pc;
                             self.step = 0;
                         }
                         _ => unreachable!(),
@@ -262,7 +285,7 @@ impl Cpu {
                             }
                         }
 
-                        pins.addr = self.pc;
+                        bus.addr = self.pc;
                         self.step = 0;
                     }
 
@@ -271,10 +294,10 @@ impl Cpu {
                 Instruction::Imm(ImmInstruction::Read(read_instruction)) => match self.step {
                     2 => {
                         self.pc += 1;
-                        let m = pins.data;
+                        let m = bus.data;
                         read_instruction.execute(self, m);
 
-                        pins.addr = self.pc;
+                        bus.addr = self.pc;
                         self.step = 0;
                     }
 
@@ -283,12 +306,12 @@ impl Cpu {
                 Instruction::Abs(AbsInstruction::Jump(_)) => match self.step {
                     2 => {
                         self.pc += 1;
-                        pins.addr = self.pc;
-                        self.temp = pins.data;
+                        bus.addr = self.pc;
+                        self.temp = bus.data;
                     }
                     3 => {
-                        self.pc = (pins.data as u16) << 8 | self.temp as u16;
-                        pins.addr = self.pc;
+                        self.pc = (bus.data as u16) << 8 | self.temp as u16;
+                        bus.addr = self.pc;
                         self.step = 0;
                     }
                     _ => unreachable!(),
@@ -296,16 +319,16 @@ impl Cpu {
                 Instruction::Abs(AbsInstruction::Read(read_instruction)) => match self.step {
                     2 => {
                         self.pc += 1;
-                        pins.addr = self.pc;
-                        self.temp = pins.data;
+                        bus.addr = self.pc;
+                        self.temp = bus.data;
                     }
                     3 => {
                         self.pc += 1;
-                        pins.addr = (pins.data as u16) << 8 | self.temp as u16;
+                        bus.addr = (bus.data as u16) << 8 | self.temp as u16;
                     }
                     4 => {
-                        read_instruction.execute(self, pins.data);
-                        pins.addr = self.pc;
+                        read_instruction.execute(self, bus.data);
+                        bus.addr = self.pc;
                         self.step = 0;
                     }
                     _ => unreachable!(),
@@ -313,17 +336,17 @@ impl Cpu {
                 Instruction::Abs(AbsInstruction::Write(write_instruction)) => match self.step {
                     2 => {
                         self.pc += 1;
-                        pins.addr = self.pc;
-                        self.temp = pins.data;
+                        bus.addr = self.pc;
+                        self.temp = bus.data;
                     }
                     3 => {
                         self.pc += 1;
-                        pins.addr = (pins.data as u16) << 8 | self.temp as u16;
-                        pins.data = write_instruction.execute(self);
-                        pins.write = true;
+                        bus.addr = (bus.data as u16) << 8 | self.temp as u16;
+                        bus.data = write_instruction.execute(self);
+                        return false;
                     }
                     4 => {
-                        pins.addr = self.pc;
+                        bus.addr = self.pc;
                         self.step = 0;
                     }
                     _ => unreachable!(),
@@ -333,23 +356,23 @@ impl Cpu {
                 )) => match self.step {
                     2 => {
                         self.pc += 1;
-                        pins.addr = self.pc;
-                        self.temp = pins.data;
+                        bus.addr = self.pc;
+                        self.temp = bus.data;
                     }
                     3 => {
                         self.pc += 1;
-                        pins.addr = (pins.data as u16) << 8 | self.temp as u16;
+                        bus.addr = (bus.data as u16) << 8 | self.temp as u16;
                     }
                     4 => {
-                        self.temp = read_modify_write_instruction.execute(self, pins.data);
-                        pins.write = true;
+                        self.temp = read_modify_write_instruction.execute(self, bus.data);
+                        return false;
                     }
                     5 => {
-                        pins.data = self.temp;
-                        pins.write = true;
+                        bus.data = self.temp;
+                        return false;
                     }
                     6 => {
-                        pins.addr = self.pc;
+                        bus.addr = self.pc;
                         self.step = 0;
                     }
                     _ => unreachable!(),
@@ -359,11 +382,11 @@ impl Cpu {
                     match self.step {
                         2 => {
                             self.pc += 1;
-                            pins.addr = pins.data as u16;
+                            bus.addr = bus.data as u16;
                         }
                         3 => {
-                            read_instruction.execute(self, pins.data);
-                            pins.addr = self.pc;
+                            read_instruction.execute(self, bus.data);
+                            bus.addr = self.pc;
                             self.step = 0;
                         }
                         _ => unreachable!(),
@@ -373,12 +396,12 @@ impl Cpu {
                     match self.step {
                         2 => {
                             self.pc += 1;
-                            pins.addr = pins.data as u16;
-                            pins.data = write_instruction.execute(self);
-                            pins.write = true;
+                            bus.addr = bus.data as u16;
+                            bus.data = write_instruction.execute(self);
+                            return false;
                         }
                         3 => {
-                            pins.addr = self.pc;
+                            bus.addr = self.pc;
                             self.step = 0;
                         }
                         _ => unreachable!(),
@@ -389,18 +412,18 @@ impl Cpu {
                 )) => match self.step {
                     2 => {
                         self.pc += 1;
-                        pins.addr = pins.data as u16;
+                        bus.addr = bus.data as u16;
                     }
                     3 => {
-                        self.temp = read_modify_write_instruction.execute(self, pins.data);
-                        pins.write = true;
+                        self.temp = read_modify_write_instruction.execute(self, bus.data);
+                        return false;
                     }
                     4 => {
-                        pins.data = self.temp;
-                        pins.write = true;
+                        bus.data = self.temp;
+                        return false;
                     }
                     5 => {
-                        pins.addr = self.pc;
+                        bus.addr = self.pc;
                         self.step = 0;
                     }
                     _ => unreachable!(),
@@ -410,19 +433,19 @@ impl Cpu {
                     match self.step {
                         2 => {
                             self.pc += 1;
-                            pins.addr = pins.data as u16;
+                            bus.addr = bus.data as u16;
                         }
                         3 => {
-                            pins.addr += match self.inst {
+                            bus.addr += match self.inst {
                                 Instruction::ZeroPageIdxX(_) => self.x,
                                 Instruction::ZeroPageIdxY(_) => self.y,
                                 _ => unreachable!(),
                             } as u16;
-                            pins.addr &= 0x00FF;
+                            bus.addr &= 0x00FF;
                         }
                         4 => {
-                            read_instruction.execute(self, pins.data);
-                            pins.addr = self.pc;
+                            read_instruction.execute(self, bus.data);
+                            bus.addr = self.pc;
                             self.step = 0;
                         }
                         _ => unreachable!(),
@@ -433,20 +456,20 @@ impl Cpu {
                     match self.step {
                         2 => {
                             self.pc += 1;
-                            pins.addr = pins.data as u16;
+                            bus.addr = bus.data as u16;
                         }
                         3 => {
-                            pins.addr += match self.inst {
+                            bus.addr += match self.inst {
                                 Instruction::ZeroPageIdxX(_) => self.x,
                                 Instruction::ZeroPageIdxY(_) => self.y,
                                 _ => unreachable!(),
                             } as u16;
-                            pins.addr &= 0x00FF;
-                            pins.data = write_instruction.execute(self);
-                            pins.write = true;
+                            bus.addr &= 0x00FF;
+                            bus.data = write_instruction.execute(self);
+                            return false;
                         }
                         4 => {
-                            pins.addr = self.pc;
+                            bus.addr = self.pc;
                             self.step = 0;
                         }
                         _ => unreachable!(),
@@ -457,22 +480,22 @@ impl Cpu {
                 )) => match self.step {
                     2 => {
                         self.pc += 1;
-                        pins.addr = pins.data as u16;
+                        bus.addr = bus.data as u16;
                     }
                     3 => {
-                        pins.addr += self.x as u16;
-                        pins.addr &= 0x00FF;
+                        bus.addr += self.x as u16;
+                        bus.addr &= 0x00FF;
                     }
                     4 => {
-                        self.temp = pins.data;
-                        pins.write = true;
+                        self.temp = bus.data;
+                        return false;
                     }
                     5 => {
-                        pins.data = read_modify_write_instruction.execute(self, self.temp);
-                        pins.write = true;
+                        bus.data = read_modify_write_instruction.execute(self, self.temp);
+                        return false;
                     }
                     6 => {
-                        pins.addr = self.pc;
+                        bus.addr = self.pc;
                         self.step = 0;
                     }
                     _ => unreachable!(),
@@ -485,19 +508,19 @@ impl Cpu {
                     match self.step {
                         2 => {
                             self.pc += 1;
-                            self.temp = pins.data;
-                            pins.addr = self.pc;
+                            self.temp = bus.data;
+                            bus.addr = self.pc;
                         }
                         3 => {
                             self.pc += 1;
-                            let addr = (pins.data as u16) << 8 | (self.temp as u16);
-                            pins.addr = addr
+                            let addr = (bus.data as u16) << 8 | (self.temp as u16);
+                            bus.addr = addr
                                 + match self.inst {
                                     Instruction::AbsIdxX(_) => self.x,
                                     Instruction::AbsIdxY(_) => self.y,
                                     _ => unreachable!(),
                                 } as u16;
-                            if (addr & 0xFF00) != (pins.addr & 0xff00) {
+                            if (addr & 0xFF00) != (bus.addr & 0xff00) {
                                 self.temp = 1;
                             } else {
                                 self.temp = 0;
@@ -505,14 +528,14 @@ impl Cpu {
                         }
                         4 => {
                             if self.temp == 0 {
-                                read_instruction.execute(self, pins.data);
-                                pins.addr = self.pc;
+                                read_instruction.execute(self, bus.data);
+                                bus.addr = self.pc;
                                 self.step = 0;
                             }
                         }
                         5 => {
-                            read_instruction.execute(self, pins.data);
-                            pins.addr = self.pc;
+                            read_instruction.execute(self, bus.data);
+                            bus.addr = self.pc;
                             self.step = 0;
                         }
                         _ => unreachable!(),
@@ -523,13 +546,13 @@ impl Cpu {
                     match self.step {
                         2 => {
                             self.pc += 1;
-                            self.temp = pins.data;
-                            pins.addr = self.pc;
+                            self.temp = bus.data;
+                            bus.addr = self.pc;
                         }
                         3 => {
                             self.pc += 1;
-                            let addr = (pins.data as u16) << 8 | (self.temp as u16);
-                            pins.addr = addr
+                            let addr = (bus.data as u16) << 8 | (self.temp as u16);
+                            bus.addr = addr
                                 + match self.inst {
                                     Instruction::AbsIdxX(_) => self.x,
                                     Instruction::AbsIdxY(_) => self.y,
@@ -537,11 +560,11 @@ impl Cpu {
                                 } as u16;
                         }
                         4 => {
-                            pins.data = write_instruction.execute(self);
-                            pins.write = true;
+                            bus.data = write_instruction.execute(self);
+                            return false;
                         }
                         5 => {
-                            pins.addr = self.pc;
+                            bus.addr = self.pc;
                             self.step = 0;
                         }
                         _ => unreachable!(),
@@ -552,19 +575,19 @@ impl Cpu {
                 )) => match self.step {
                     2 => {
                         self.pc += 1;
-                        self.temp = pins.data;
-                        pins.addr = self.pc;
+                        self.temp = bus.data;
+                        bus.addr = self.pc;
                     }
                     3 => {
                         self.pc += 1;
-                        let addr = (pins.data as u16) << 8 | (self.temp as u16);
-                        pins.addr = addr
+                        let addr = (bus.data as u16) << 8 | (self.temp as u16);
+                        bus.addr = addr
                             + match self.inst {
                                 Instruction::AbsIdxX(_) => self.x,
                                 Instruction::AbsIdxY(_) => self.y,
                                 _ => unreachable!(),
                             } as u16;
-                        if (addr & 0xFF00) != (pins.addr & 0xff00) {
+                        if (addr & 0xFF00) != (bus.addr & 0xff00) {
                             self.temp = 1;
                         } else {
                             self.temp = 0;
@@ -572,19 +595,19 @@ impl Cpu {
                     }
                     4 => {
                         if self.temp != 0 {
-                            pins.addr += 0x100;
+                            bus.addr += 0x100;
                         }
                     }
                     5 => {
-                        self.temp = pins.data;
-                        pins.write = true;
+                        self.temp = bus.data;
+                        return false;
                     }
                     6 => {
-                        pins.data = read_modify_write_instruction.execute(self, self.temp);
-                        pins.write = true;
+                        bus.data = read_modify_write_instruction.execute(self, self.temp);
+                        return false;
                     }
                     7 => {
-                        pins.addr = self.pc;
+                        bus.addr = self.pc;
                         self.step = 0;
                     }
                     _ => unreachable!(),
@@ -595,7 +618,7 @@ impl Cpu {
                 Instruction::Rel(RelInstruction::Branch(branch_instruction)) => match self.step {
                     2 => {
                         self.pc += 1;
-                        self.temp = pins.data;
+                        self.temp = bus.data;
                         if branch_instruction.execute(self) {
                             let j = (self.temp as i8) as i16;
                             let pc = self.pc.wrapping_add_signed(j);
@@ -608,13 +631,13 @@ impl Cpu {
                         } else {
                             self.step = 0;
                         }
-                        pins.addr = self.pc;
+                        bus.addr = self.pc;
                     }
                     3 => {
                         if self.temp == 0 {
                             self.step = 0;
                         }
-                        pins.addr = self.pc;
+                        bus.addr = self.pc;
                     }
                     4 => {
                         self.step = 0;
@@ -624,23 +647,23 @@ impl Cpu {
                 Instruction::IdxInd(IdxIndInstruction::Read(read_instruction)) => match self.step {
                     2 => {
                         self.pc += 1;
-                        pins.addr = pins.data as u16;
+                        bus.addr = bus.data as u16;
                     }
                     3 => {
-                        pins.addr = pins.addr.wrapping_add(self.x as u16);
-                        pins.addr &= 0x00FF;
+                        bus.addr = bus.addr.wrapping_add(self.x as u16);
+                        bus.addr &= 0x00FF;
                     }
                     4 => {
-                        self.temp = pins.data;
-                        pins.addr = pins.addr.wrapping_add(1);
-                        pins.addr &= 0x00FF;
+                        self.temp = bus.data;
+                        bus.addr = bus.addr.wrapping_add(1);
+                        bus.addr &= 0x00FF;
                     }
                     5 => {
-                        pins.addr = (pins.data as u16) << 8 | self.temp as u16;
+                        bus.addr = (bus.data as u16) << 8 | self.temp as u16;
                     }
                     6 => {
-                        read_instruction.execute(self, pins.data);
-                        pins.addr = self.pc;
+                        read_instruction.execute(self, bus.data);
+                        bus.addr = self.pc;
                         self.step = 0;
                     }
                     _ => unreachable!(),
@@ -649,24 +672,24 @@ impl Cpu {
                 {
                     2 => {
                         self.pc += 1;
-                        pins.addr = pins.data as u16;
+                        bus.addr = bus.data as u16;
                     }
                     3 => {
-                        pins.addr = pins.addr.wrapping_add(self.x as u16);
-                        pins.addr &= 0x00FF;
+                        bus.addr = bus.addr.wrapping_add(self.x as u16);
+                        bus.addr &= 0x00FF;
                     }
                     4 => {
-                        self.temp = pins.data;
-                        pins.addr = pins.addr.wrapping_add(1);
-                        pins.addr &= 0x00FF;
+                        self.temp = bus.data;
+                        bus.addr = bus.addr.wrapping_add(1);
+                        bus.addr &= 0x00FF;
                     }
                     5 => {
-                        pins.addr = (pins.data as u16) << 8 | self.temp as u16;
-                        pins.data = write_instruction.execute(self);
-                        pins.write = true;
+                        bus.addr = (bus.data as u16) << 8 | self.temp as u16;
+                        bus.data = write_instruction.execute(self);
+                        return false;
                     }
                     6 => {
-                        pins.addr = self.pc;
+                        bus.addr = self.pc;
                         self.step = 0;
                     }
                     _ => unreachable!(),
@@ -674,29 +697,29 @@ impl Cpu {
                 Instruction::IndIdx(IndIdxInstruction::Read(read_instruction)) => match self.step {
                     2 => {
                         self.pc += 1;
-                        pins.addr = pins.data as u16;
+                        bus.addr = bus.data as u16;
                     }
                     3 => {
-                        self.temp = pins.data; // ADL
-                        pins.addr = pins.addr.wrapping_add(1) & 0x00FF;
+                        self.temp = bus.data; // ADL
+                        bus.addr = bus.addr.wrapping_add(1) & 0x00FF;
                     }
                     4 => {
                         let adl_idx = self.temp.wrapping_add(self.y);
-                        pins.addr = (pins.data as u16) << 8 | adl_idx as u16;
+                        bus.addr = (bus.data as u16) << 8 | adl_idx as u16;
                     }
                     5 => {
-                        let adl_idx = (pins.addr & 0x00FF) as u8;
+                        let adl_idx = (bus.addr & 0x00FF) as u8;
                         if adl_idx < self.temp {
-                            pins.addr += 0x100;
+                            bus.addr += 0x100;
                         } else {
-                            read_instruction.execute(self, pins.data);
-                            pins.addr = self.pc;
+                            read_instruction.execute(self, bus.data);
+                            bus.addr = self.pc;
                             self.step = 0;
                         }
                     }
                     6 => {
-                        read_instruction.execute(self, pins.data);
-                        pins.addr = self.pc;
+                        read_instruction.execute(self, bus.data);
+                        bus.addr = self.pc;
                         self.step = 0;
                     }
                     _ => unreachable!(),
@@ -705,26 +728,26 @@ impl Cpu {
                 {
                     2 => {
                         self.pc += 1;
-                        pins.addr = pins.data as u16;
+                        bus.addr = bus.data as u16;
                     }
                     3 => {
-                        self.temp = pins.data; // ADL
-                        pins.addr = pins.addr.wrapping_add(1) & 0x00FF;
+                        self.temp = bus.data; // ADL
+                        bus.addr = bus.addr.wrapping_add(1) & 0x00FF;
                     }
                     4 => {
                         let adl_idx = self.temp.wrapping_add(self.y);
-                        pins.addr = (pins.data as u16) << 8 | adl_idx as u16;
+                        bus.addr = (bus.data as u16) << 8 | adl_idx as u16;
                     }
                     5 => {
-                        let adl_idx = (pins.addr & 0x00FF) as u8;
+                        let adl_idx = (bus.addr & 0x00FF) as u8;
                         if adl_idx < self.temp {
-                            pins.addr += 0x100;
+                            bus.addr += 0x100;
                         }
-                        pins.data = write_instruction.execute(self);
-                        pins.write = true;
+                        bus.data = write_instruction.execute(self);
+                        return false;
                     }
                     6 => {
-                        pins.addr = self.pc;
+                        bus.addr = self.pc;
                         self.step = 0;
                     }
                     _ => unreachable!(),
@@ -732,46 +755,40 @@ impl Cpu {
                 Instruction::AbsInd(_) => match self.step {
                     2 => {
                         self.pc += 1;
-                        self.temp = pins.data;
-                        pins.addr = self.pc;
+                        self.temp = bus.data;
+                        bus.addr = self.pc;
                     }
                     3 => {
                         self.pc += 1;
-                        pins.addr = (pins.data as u16) << 8 | self.temp as u16;
+                        bus.addr = (bus.data as u16) << 8 | self.temp as u16;
                     }
                     4 => {
-                        self.temp = pins.data;
-                        let adh = pins.addr & 0xFF00;
-                        let adl = (pins.addr & 0x00FF) as u8;
+                        self.temp = bus.data;
+                        let adh = bus.addr & 0xFF00;
+                        let adl = (bus.addr & 0x00FF) as u8;
                         let adl = adl.wrapping_add(1);
-                        pins.addr = adh | adl as u16;
+                        bus.addr = adh | adl as u16;
                     }
                     5 => {
-                        self.pc = (pins.data as u16) << 8 | self.temp as u16;
+                        self.pc = (bus.data as u16) << 8 | self.temp as u16;
                         self.step = 0;
-                        pins.addr = self.pc;
+                        bus.addr = self.pc;
                     }
                     _ => unreachable!(),
                 },
                 Instruction::Invalid(op) => panic!("Invalid Instruction {op:#04x}"),
             };
         }
-    }
-}
 
-#[derive(Default)]
-pub struct Pins {
-    addr: u16,
-    data: u8,
-    write: bool,
-    rst: bool,
-    nmi: bool,
-    irq: bool,
-}
+        // handle reset immediately
+        if self.rst {
+            self.step = 0;
+        }
 
-impl Pins {
-    pub fn new() -> Self {
-        Pins::default()
+        // IRQ is level triggered - needs to be set each clock.
+        self.irq = false;
+
+        true
     }
 }
 
@@ -798,22 +815,18 @@ mod tests {
         }
 
         let mut cpu = Cpu::new();
-        let mut pins = Pins::new();
+        let mut bus = Bus::new();
 
         cpu.pc = 0x400;
         cpu.step = 0;
-        pins.rst = false;
-        pins.nmi = false;
-        pins.irq = false;
-        pins.addr = 0x400;
-        pins.data = ram[0x400];
+        bus.addr = 0x400;
+        bus.data = ram[0x400];
 
         for _ in 0u64..96241364 {
-            cpu.clock(&mut pins);
-            if pins.write {
-                ram[pins.addr as usize] = pins.data;
+            if cpu.clock(&mut bus) {
+                bus.data = ram[bus.addr as usize];
             } else {
-                pins.data = ram[pins.addr as usize];
+                ram[bus.addr as usize] = bus.data;
             }
         }
 
