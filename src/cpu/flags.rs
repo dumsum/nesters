@@ -1,4 +1,3 @@
-
 #[derive(Default, Clone, Copy)]
 pub(super) struct Flags {
     pub(super) n: bool,
