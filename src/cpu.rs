@@ -269,7 +269,7 @@ impl ReadInstruction {
             ReadInstruction::Bit => {
                 cpu.p.set_z(cpu.a & m);
                 cpu.p.n = m & (1 << 7) != 0;
-                cpu.p.z = m & (1 << 6) != 0;
+                cpu.p.v = m & (1 << 6) != 0;
             }
         };
     }
@@ -323,21 +323,21 @@ impl ReadModifyWriteInstruction {
             }
             ReadModifyWriteInstruction::Rol => {
                 let c = if cpu.p.c { 1u8 } else { 0u8 };
-                let a = m.wrapping_shl(1) & c;
+                let a = m.wrapping_shl(1) | c;
 
                 cpu.p.set_n(a);
                 cpu.p.set_z(a);
-                cpu.p.c = m & 0x80 != 0;
+                cpu.p.c = m & (1 << 7) != 0;
 
                 a
             }
             ReadModifyWriteInstruction::Ror => {
                 let c = if cpu.p.c { 0x80u8 } else { 0u8 };
-                let a = m.wrapping_shr(1) & c;
+                let a = m.wrapping_shr(1) | c;
 
                 cpu.p.set_n(a);
                 cpu.p.set_z(a);
-                cpu.p.c = m & 0x01 != 0;
+                cpu.p.c = m & (1 << 0) != 0;
 
                 a
             }
@@ -703,7 +703,7 @@ impl Cpu {
             0x90 => Instruction::Rel(RelInstruction::Branch(BranchInstruction::Bcc)),
             0x91 => Instruction::IndIdx(IndIdxInstruction::Write(WriteInstruction::Sta)),
             0x94 => Instruction::ZeroPageIdxX(ZeroPageIdxInstruction::Write(WriteInstruction::Sty)),
-            0x95 => Instruction::ZeroPageIdxY(ZeroPageIdxInstruction::Write(WriteInstruction::Sta)),
+            0x95 => Instruction::ZeroPageIdxX(ZeroPageIdxInstruction::Write(WriteInstruction::Sta)),
             0x96 => Instruction::ZeroPageIdxY(ZeroPageIdxInstruction::Write(WriteInstruction::Stx)),
             0x98 => {
                 Instruction::AccumImpl(AccumImplInstruction::Internal(InternalInstruction::Tya))
@@ -1430,11 +1430,23 @@ impl Cpu {
                     pins.addr = self.pc;
                 }
                 3 => {
-                    pins.addr = (pins.data as u16) << 8 | self.temp.wrapping_add(self.x) as u16;
+                    self.pc += 1;
+                    let addr = (pins.data as u16) << 8 | (self.temp as u16);
+                    pins.addr = addr
+                        + match self.inst {
+                            Instruction::AbsIdxX(_) => self.x,
+                            Instruction::AbsIdxY(_) => self.y,
+                            _ => unreachable!(),
+                        } as u16;
+                    if (addr & 0xFF00) != (pins.addr & 0xff00) {
+                        self.temp = 1;
+                    } else {
+                        self.temp = 0;
+                    }
                 }
                 4 => {
                     let adl_idx = (pins.addr & 0x00FF) as u8;
-                    if adl_idx < self.temp {
+                    if self.temp != 0 {
                         pins.addr += 0x100;
                     }
                 }
@@ -1500,10 +1512,12 @@ impl Cpu {
                 }
                 3 => {
                     pins.addr = pins.addr.wrapping_add(self.x as u16);
+                    pins.addr &= 0x00FF;
                 }
                 4 => {
                     self.temp = pins.data;
                     pins.addr = pins.addr.wrapping_add(1);
+                    pins.addr &= 0x00FF;
                 }
                 5 => {
                     pins.addr = (pins.data as u16) << 8 | self.temp as u16;
@@ -1526,10 +1540,12 @@ impl Cpu {
                 }
                 3 => {
                     pins.addr = pins.addr.wrapping_add(self.x as u16);
+                    pins.addr &= 0x00FF;
                 }
                 4 => {
                     self.temp = pins.data;
                     pins.addr = pins.addr.wrapping_add(1);
+                    pins.addr &= 0x00FF;
                 }
                 5 => {
                     pins.addr = (pins.data as u16) << 8 | self.temp as u16;
@@ -1672,7 +1688,7 @@ mod tests {
         pins.addr = 0x400;
         pins.data = ram[0x400];
 
-        for total_cycles in 0u64..88000 {
+        for total_cycles in 0u64..110000 {
             println!(
                 "Cycle {}: AddrBus: {:#06x}, DataBus: {:#04x}, R/W: {}, PC: {:#06x}, IR: {:x?}, Step: {}, SP: {:#04x}, A: {:#04x}, X: {:#04x}, Y: {:#04x}, P: {}",
                 total_cycles, pins.addr, pins.data, if pins.write {'W'} else {'R'}, cpu.pc, cpu.inst, cpu.step, cpu.s, cpu.a, cpu.x, cpu.y, cpu.p
