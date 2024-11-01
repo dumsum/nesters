@@ -223,21 +223,45 @@ impl ReadInstruction {
             ReadInstruction::Adc => {
                 let c = if cpu.p.c { 1u8 } else { 0u8 };
                 let a = cpu.a;
-                cpu.a = a.wrapping_add(m).wrapping_add(c);
-                cpu.p.set_c(a as u16 + m as u16 + c as u16);
-                cpu.p.set_v(a, m, c);
-                cpu.p.set_n(cpu.a);
-                cpu.p.set_z(cpu.a);
+                if cpu.p.d {
+                    let al = (a & 0x0F) as u16 + (m & 0x0F) as u16 + c as u16;
+                    let al = al + if al > 9 { 6 } else { 0 };
+                    let ah = (a >> 4) as u16 + (m >> 4) as u16 + (if al > 0x0F { 1 } else { 0 });
+                    cpu.p.set_z(a.wrapping_add(m).wrapping_add(c));
+                    cpu.p.n = ah & 0x08 != 0;
+                    cpu.p.v = ((ah << 4) ^ a as u16) & 0x80 != 0 && ((a ^ m) & 0x80 == 0);
+                    let ah = ah + if ah > 9 { 6 } else { 0 };
+                    cpu.p.c = ah > 0x0F;
+                    cpu.a = (ah << 4) as u8 | (al & 0x0F) as u8;
+                } else {
+                    cpu.a = a.wrapping_add(m).wrapping_add(c);
+                    cpu.p.set_c(a as u16 + m as u16 + c as u16);
+                    cpu.p.set_v(a, m, c);
+                    cpu.p.set_n(cpu.a);
+                    cpu.p.set_z(cpu.a);
+                }
             }
             ReadInstruction::Sbc => {
                 let c = if cpu.p.c { 1u8 } else { 0u8 };
                 let a = cpu.a;
-                let m = !m;
-                cpu.a = a.wrapping_add(m).wrapping_add(c);
-                cpu.p.set_c(a as u16 + m as u16 + c as u16);
-                cpu.p.set_v(a, m, c);
-                cpu.p.set_n(cpu.a);
-                cpu.p.set_z(cpu.a);
+                if cpu.p.d {
+                    let al = (a & 0x0F) as u16 - (m & 0x0F) as u16 - (1 - c) as u16;
+                    let al = al - if al & 0x10 != 0 { 6 } else { 0 };
+                    let ah = (a >> 4) as u16 - (m>> 4) as u16 - if al & 0x10 != 0 {1} else {0};
+                    let ah = ah - if ah & 0x10 != 0 { 6 } else { 0 };
+                    cpu.p.set_c(a as u16 + !m as u16 + c as u16);
+                    cpu.p.set_v(a, !m, c);
+                    cpu.a = (ah << 4) as u8 | (al & 0x0F) as u8;
+                    cpu.p.set_n(cpu.a);
+                    cpu.p.set_z(cpu.a);
+                } else {
+                    let m = !m;
+                    cpu.a = a.wrapping_add(m).wrapping_add(c);
+                    cpu.p.set_c(a as u16 + m as u16 + c as u16);
+                    cpu.p.set_v(a, m, c);
+                    cpu.p.set_n(cpu.a);
+                    cpu.p.set_z(cpu.a);
+                }
             }
             ReadInstruction::Cmp => {
                 let c = 1u8;
@@ -1688,11 +1712,7 @@ mod tests {
         pins.addr = 0x400;
         pins.data = ram[0x400];
 
-        for total_cycles in 0u64..110000 {
-            println!(
-                "Cycle {}: AddrBus: {:#06x}, DataBus: {:#04x}, R/W: {}, PC: {:#06x}, IR: {:x?}, Step: {}, SP: {:#04x}, A: {:#04x}, X: {:#04x}, Y: {:#04x}, P: {}",
-                total_cycles, pins.addr, pins.data, if pins.write {'W'} else {'R'}, cpu.pc, cpu.inst, cpu.step, cpu.s, cpu.a, cpu.x, cpu.y, cpu.p
-            );
+        for _ in 0u64..96241364 {
             cpu.clock(&mut pins);
             if pins.write {
                 ram[pins.addr as usize] = pins.data;
@@ -1700,5 +1720,7 @@ mod tests {
                 pins.data = ram[pins.addr as usize];
             }
         }
+
+        assert_eq!(cpu.pc, 0x3469);
     }
 }
