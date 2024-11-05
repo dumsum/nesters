@@ -803,7 +803,7 @@ mod tests {
     fn _6502_functional_test() {
         let mut ram = [0u8; 0x10000];
 
-        let path = Path::new("data/6502_functional_test.bin");
+        let path = Path::new("6502_65C02_functional_tests/bin_files/6502_functional_test.bin");
         let mut file = match File::open(path) {
             Ok(file) => file,
             Err(why) => panic!("Couldn't open {}: {}", path.display(), why),
