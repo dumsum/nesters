@@ -1,6 +1,7 @@
 mod flags;
 mod instruction;
-use super::bus::Bus;
+use super::bus::BusEvent;
+
 use flags::*;
 use instruction::*;
 
@@ -40,7 +41,7 @@ impl Cpu {
     }
 
     /// Advances the CPU by one clock cycle. Returns true when bus action is read.
-    pub fn clock(&mut self, bus: &mut Bus) -> bool {
+    pub fn clock(&mut self, mut addr: u16, mut data: u8) -> BusEvent {
         if self.step == 0 {
             self.inst = if self.rst {
                 Instruction::Stack(StackInstruction::Brk(Interrupt::Rst))
@@ -49,7 +50,7 @@ impl Cpu {
             } else if self.irq {
                 Instruction::Stack(StackInstruction::Brk(Interrupt::Irq))
             } else {
-                bus.data.into()
+                data.into()
             };
         }
 
@@ -57,7 +58,7 @@ impl Cpu {
 
         if self.step == 1 {
             self.pc += 1;
-            bus.addr = self.pc;
+            addr = self.pc;
         } else {
             match self.inst {
                 Instruction::Stack(stack_instruction) => match stack_instruction {
@@ -68,64 +69,64 @@ impl Cpu {
                                 Interrupt::Nmi | Interrupt::Irq => 0,
                             };
 
-                            bus.addr = 0x100 | self.s as u16;
+                            addr = 0x100 | self.s as u16;
                             self.s = self.s.wrapping_sub(1);
 
                             match int {
                                 Interrupt::Rst => {}
                                 Interrupt::Irq | Interrupt::Nmi | Interrupt::Brk => {
-                                    bus.data = ((self.pc & 0xFF00) >> 8) as u8;
-                                    return false;
+                                    data = ((self.pc & 0xFF00) >> 8) as u8;
+                                    return BusEvent::Write ( addr, data );
                                 }
                             }
                         }
                         3 => {
-                            bus.addr = 0x100 | self.s as u16;
+                            addr = 0x100 | self.s as u16;
                             self.s = self.s.wrapping_sub(1);
 
                             match int {
                                 Interrupt::Rst => {}
                                 Interrupt::Irq | Interrupt::Nmi | Interrupt::Brk => {
-                                    bus.data = (self.pc & 0x00FF) as u8;
-                                    return false;
+                                    data = (self.pc & 0x00FF) as u8;
+                                    return BusEvent::Write ( addr, data );
                                 }
                             }
                         }
                         4 => {
-                            bus.addr = 0x100 | self.s as u16;
+                            addr = 0x100 | self.s as u16;
                             self.s = self.s.wrapping_sub(1);
                             match int {
                                 Interrupt::Rst => {}
                                 Interrupt::Irq | Interrupt::Nmi => {
-                                    bus.data = self.p.into();
+                                    data = self.p.into();
                                     self.p.i = true;
-                                    return false;
+                                    return BusEvent::Write ( addr, data );
                                 }
                                 Interrupt::Brk => {
-                                    bus.data = u8::from(self.p) | 1u8 << 4; //assert B with BRK
+                                    data = u8::from(self.p) | 1u8 << 4; //assert B with BRK
                                     self.p.i = true;
-                                    return false;
+                                    return BusEvent::Write ( addr, data );
                                 }
                             }
                         }
                         5 => {
-                            bus.addr = match int {
+                            addr = match int {
                                 Interrupt::Brk | Interrupt::Irq => 0xFFFE,
                                 Interrupt::Nmi => 0xFFFA,
                                 Interrupt::Rst => 0xFFFC,
                             }
                         }
                         6 => {
-                            self.temp = bus.data;
-                            bus.addr = match int {
+                            self.temp = data;
+                            addr = match int {
                                 Interrupt::Brk | Interrupt::Irq => 0xFFFF,
                                 Interrupt::Nmi => 0xFFFB,
                                 Interrupt::Rst => 0xFFFD,
                             };
                         }
                         7 => {
-                            self.pc = (bus.data as u16) << 8 | self.temp as u16;
-                            bus.addr = self.pc;
+                            self.pc = (data as u16) << 8 | self.temp as u16;
+                            addr = self.pc;
 
                             match int {
                                 Interrupt::Rst => self.rst = false,
@@ -138,107 +139,107 @@ impl Cpu {
                     },
                     StackInstruction::Rti => match self.step {
                         2 => {
-                            bus.addr = self.s as u16 + 0x100;
+                            addr = self.s as u16 + 0x100;
                         }
                         3 => {
                             self.s = self.s.wrapping_add(1);
-                            bus.addr = self.s as u16 + 0x100;
+                            addr = self.s as u16 + 0x100;
                         }
                         4 => {
                             self.s = self.s.wrapping_add(1);
-                            self.p = bus.data.into();
-                            bus.addr = self.s as u16 + 0x100;
+                            self.p = data.into();
+                            addr = self.s as u16 + 0x100;
                         }
                         5 => {
                             self.s = self.s.wrapping_add(1);
-                            self.temp = bus.data;
-                            bus.addr = self.s as u16 + 0x100;
+                            self.temp = data;
+                            addr = self.s as u16 + 0x100;
                         }
                         6 => {
-                            self.pc = (bus.data as u16) << 8 | self.temp as u16;
-                            bus.addr = self.pc;
+                            self.pc = (data as u16) << 8 | self.temp as u16;
+                            addr = self.pc;
                             self.step = 0;
                         }
                         _ => unreachable!(),
                     },
                     StackInstruction::Rts => match self.step {
                         2 => {
-                            bus.addr = self.s as u16 + 0x100;
+                            addr = self.s as u16 + 0x100;
                         }
                         3 => {
                             self.s = self.s.wrapping_add(1);
-                            bus.addr = self.s as u16 + 0x100;
+                            addr = self.s as u16 + 0x100;
                         }
                         4 => {
                             self.s = self.s.wrapping_add(1);
-                            self.temp = bus.data;
-                            bus.addr = self.s as u16 + 0x100;
+                            self.temp = data;
+                            addr = self.s as u16 + 0x100;
                         }
                         5 => {
-                            self.pc = (bus.data as u16) << 8 | self.temp as u16;
-                            bus.addr = self.pc;
+                            self.pc = (data as u16) << 8 | self.temp as u16;
+                            addr = self.pc;
                         }
                         6 => {
                             self.pc += 1;
-                            bus.addr = self.pc;
+                            addr = self.pc;
                             self.step = 0;
                         }
                         _ => unreachable!(),
                     },
                     StackInstruction::Pha => match self.step {
                         2 => {
-                            bus.addr = self.s as u16 + 0x100;
-                            bus.data = self.a;
-                            return false;
+                            addr = self.s as u16 + 0x100;
+                            data = self.a;
+                            return BusEvent::Write ( addr, data );
                         }
                         3 => {
                             self.s = self.s.wrapping_sub(1);
-                            bus.addr = self.pc;
+                            addr = self.pc;
                             self.step = 0;
                         }
                         _ => unreachable!(),
                     },
                     StackInstruction::Php => match self.step {
                         2 => {
-                            bus.addr = self.s as u16 + 0x100;
-                            bus.data = u8::from(self.p) | (1u8 << 4); // assert B for PHP
-                            return false;
+                            addr = self.s as u16 + 0x100;
+                            data = u8::from(self.p) | (1u8 << 4); // assert B for PHP
+                            return BusEvent::Write ( addr, data );
                         }
                         3 => {
                             self.s = self.s.wrapping_sub(1);
-                            bus.addr = self.pc;
+                            addr = self.pc;
                             self.step = 0;
                         }
                         _ => unreachable!(),
                     },
                     StackInstruction::Pla => match self.step {
                         2 => {
-                            bus.addr = self.s as u16 + 0x100;
+                            addr = self.s as u16 + 0x100;
                         }
                         3 => {
                             self.s = self.s.wrapping_add(1);
-                            bus.addr = self.s as u16 + 0x100;
+                            addr = self.s as u16 + 0x100;
                         }
                         4 => {
-                            self.a = bus.data;
+                            self.a = data;
                             self.p.set_n(self.a);
                             self.p.set_z(self.a);
-                            bus.addr = self.pc;
+                            addr = self.pc;
                             self.step = 0;
                         }
                         _ => unreachable!(),
                     },
                     StackInstruction::Plp => match self.step {
                         2 => {
-                            bus.addr = self.s as u16 + 0x100;
+                            addr = self.s as u16 + 0x100;
                         }
                         3 => {
                             self.s = self.s.wrapping_add(1);
-                            bus.addr = self.s as u16 + 0x100;
+                            addr = self.s as u16 + 0x100;
                         }
                         4 => {
-                            self.p = bus.data.into();
-                            bus.addr = self.pc;
+                            self.p = data.into();
+                            addr = self.pc;
                             self.step = 0;
                         }
                         _ => unreachable!(),
@@ -246,27 +247,27 @@ impl Cpu {
                     StackInstruction::Jsr => match self.step {
                         2 => {
                             self.pc += 1;
-                            self.temp = bus.data;
-                            bus.addr = self.s as u16 + 0x100;
+                            self.temp = data;
+                            addr = self.s as u16 + 0x100;
                         }
                         3 => {
-                            bus.addr = self.s as u16 + 0x100;
-                            bus.data = ((self.pc & 0xFF00) >> 8) as u8;
-                            return false;
+                            addr = self.s as u16 + 0x100;
+                            data = ((self.pc & 0xFF00) >> 8) as u8;
+                            return BusEvent::Write ( addr, data );
                         }
                         4 => {
                             self.s = self.s.wrapping_sub(1);
-                            bus.addr = self.s as u16 + 0x100;
-                            bus.data = (self.pc & 0x00FF) as u8;
-                            return false;
+                            addr = self.s as u16 + 0x100;
+                            data = (self.pc & 0x00FF) as u8;
+                            return BusEvent::Write ( addr, data );
                         }
                         5 => {
                             self.s = self.s.wrapping_sub(1);
-                            bus.addr = self.pc;
+                            addr = self.pc;
                         }
                         6 => {
-                            self.pc = (bus.data as u16) << 8 | self.temp as u16;
-                            bus.addr = self.pc;
+                            self.pc = (data as u16) << 8 | self.temp as u16;
+                            addr = self.pc;
                             self.step = 0;
                         }
                         _ => unreachable!(),
@@ -285,7 +286,7 @@ impl Cpu {
                             }
                         }
 
-                        bus.addr = self.pc;
+                        addr = self.pc;
                         self.step = 0;
                     }
 
@@ -294,10 +295,10 @@ impl Cpu {
                 Instruction::Imm(ImmInstruction::Read(read_instruction)) => match self.step {
                     2 => {
                         self.pc += 1;
-                        let m = bus.data;
+                        let m = data;
                         read_instruction.execute(self, m);
 
-                        bus.addr = self.pc;
+                        addr = self.pc;
                         self.step = 0;
                     }
 
@@ -306,12 +307,12 @@ impl Cpu {
                 Instruction::Abs(AbsInstruction::Jump(_)) => match self.step {
                     2 => {
                         self.pc += 1;
-                        bus.addr = self.pc;
-                        self.temp = bus.data;
+                        addr = self.pc;
+                        self.temp = data;
                     }
                     3 => {
-                        self.pc = (bus.data as u16) << 8 | self.temp as u16;
-                        bus.addr = self.pc;
+                        self.pc = (data as u16) << 8 | self.temp as u16;
+                        addr = self.pc;
                         self.step = 0;
                     }
                     _ => unreachable!(),
@@ -319,16 +320,16 @@ impl Cpu {
                 Instruction::Abs(AbsInstruction::Read(read_instruction)) => match self.step {
                     2 => {
                         self.pc += 1;
-                        bus.addr = self.pc;
-                        self.temp = bus.data;
+                        addr = self.pc;
+                        self.temp = data;
                     }
                     3 => {
                         self.pc += 1;
-                        bus.addr = (bus.data as u16) << 8 | self.temp as u16;
+                        addr = (data as u16) << 8 | self.temp as u16;
                     }
                     4 => {
-                        read_instruction.execute(self, bus.data);
-                        bus.addr = self.pc;
+                        read_instruction.execute(self, data);
+                        addr = self.pc;
                         self.step = 0;
                     }
                     _ => unreachable!(),
@@ -336,17 +337,17 @@ impl Cpu {
                 Instruction::Abs(AbsInstruction::Write(write_instruction)) => match self.step {
                     2 => {
                         self.pc += 1;
-                        bus.addr = self.pc;
-                        self.temp = bus.data;
+                        addr = self.pc;
+                        self.temp = data;
                     }
                     3 => {
                         self.pc += 1;
-                        bus.addr = (bus.data as u16) << 8 | self.temp as u16;
-                        bus.data = write_instruction.execute(self);
-                        return false;
+                        addr = (data as u16) << 8 | self.temp as u16;
+                        data = write_instruction.execute(self);
+                        return BusEvent::Write ( addr, data );
                     }
                     4 => {
-                        bus.addr = self.pc;
+                        addr = self.pc;
                         self.step = 0;
                     }
                     _ => unreachable!(),
@@ -356,23 +357,23 @@ impl Cpu {
                 )) => match self.step {
                     2 => {
                         self.pc += 1;
-                        bus.addr = self.pc;
-                        self.temp = bus.data;
+                        addr = self.pc;
+                        self.temp = data;
                     }
                     3 => {
                         self.pc += 1;
-                        bus.addr = (bus.data as u16) << 8 | self.temp as u16;
+                        addr = (data as u16) << 8 | self.temp as u16;
                     }
                     4 => {
-                        self.temp = read_modify_write_instruction.execute(self, bus.data);
-                        return false;
+                        self.temp = read_modify_write_instruction.execute(self, data);
+                        return BusEvent::Write ( addr, data );
                     }
                     5 => {
-                        bus.data = self.temp;
-                        return false;
+                        data = self.temp;
+                        return BusEvent::Write ( addr, data );
                     }
                     6 => {
-                        bus.addr = self.pc;
+                        addr = self.pc;
                         self.step = 0;
                     }
                     _ => unreachable!(),
@@ -382,11 +383,11 @@ impl Cpu {
                     match self.step {
                         2 => {
                             self.pc += 1;
-                            bus.addr = bus.data as u16;
+                            addr = data as u16;
                         }
                         3 => {
-                            read_instruction.execute(self, bus.data);
-                            bus.addr = self.pc;
+                            read_instruction.execute(self, data);
+                            addr = self.pc;
                             self.step = 0;
                         }
                         _ => unreachable!(),
@@ -396,12 +397,12 @@ impl Cpu {
                     match self.step {
                         2 => {
                             self.pc += 1;
-                            bus.addr = bus.data as u16;
-                            bus.data = write_instruction.execute(self);
-                            return false;
+                            addr = data as u16;
+                            data = write_instruction.execute(self);
+                            return BusEvent::Write ( addr, data );
                         }
                         3 => {
-                            bus.addr = self.pc;
+                            addr = self.pc;
                             self.step = 0;
                         }
                         _ => unreachable!(),
@@ -412,18 +413,18 @@ impl Cpu {
                 )) => match self.step {
                     2 => {
                         self.pc += 1;
-                        bus.addr = bus.data as u16;
+                        addr = data as u16;
                     }
                     3 => {
-                        self.temp = read_modify_write_instruction.execute(self, bus.data);
-                        return false;
+                        self.temp = read_modify_write_instruction.execute(self, data);
+                        return BusEvent::Write ( addr, data );
                     }
                     4 => {
-                        bus.data = self.temp;
-                        return false;
+                        data = self.temp;
+                        return BusEvent::Write ( addr, data );
                     }
                     5 => {
-                        bus.addr = self.pc;
+                        addr = self.pc;
                         self.step = 0;
                     }
                     _ => unreachable!(),
@@ -433,19 +434,19 @@ impl Cpu {
                     match self.step {
                         2 => {
                             self.pc += 1;
-                            bus.addr = bus.data as u16;
+                            addr = data as u16;
                         }
                         3 => {
-                            bus.addr += match self.inst {
+                            addr += match self.inst {
                                 Instruction::ZeroPageIdxX(_) => self.x,
                                 Instruction::ZeroPageIdxY(_) => self.y,
                                 _ => unreachable!(),
                             } as u16;
-                            bus.addr &= 0x00FF;
+                            addr &= 0x00FF;
                         }
                         4 => {
-                            read_instruction.execute(self, bus.data);
-                            bus.addr = self.pc;
+                            read_instruction.execute(self, data);
+                            addr = self.pc;
                             self.step = 0;
                         }
                         _ => unreachable!(),
@@ -456,20 +457,20 @@ impl Cpu {
                     match self.step {
                         2 => {
                             self.pc += 1;
-                            bus.addr = bus.data as u16;
+                            addr = data as u16;
                         }
                         3 => {
-                            bus.addr += match self.inst {
+                            addr += match self.inst {
                                 Instruction::ZeroPageIdxX(_) => self.x,
                                 Instruction::ZeroPageIdxY(_) => self.y,
                                 _ => unreachable!(),
                             } as u16;
-                            bus.addr &= 0x00FF;
-                            bus.data = write_instruction.execute(self);
-                            return false;
+                            addr &= 0x00FF;
+                            data = write_instruction.execute(self);
+                            return BusEvent::Write ( addr, data );
                         }
                         4 => {
-                            bus.addr = self.pc;
+                            addr = self.pc;
                             self.step = 0;
                         }
                         _ => unreachable!(),
@@ -480,22 +481,22 @@ impl Cpu {
                 )) => match self.step {
                     2 => {
                         self.pc += 1;
-                        bus.addr = bus.data as u16;
+                        addr = data as u16;
                     }
                     3 => {
-                        bus.addr += self.x as u16;
-                        bus.addr &= 0x00FF;
+                        addr += self.x as u16;
+                        addr &= 0x00FF;
                     }
                     4 => {
-                        self.temp = bus.data;
-                        return false;
+                        self.temp = data;
+                        return BusEvent::Write ( addr, data );
                     }
                     5 => {
-                        bus.data = read_modify_write_instruction.execute(self, self.temp);
-                        return false;
+                        data = read_modify_write_instruction.execute(self, self.temp);
+                        return BusEvent::Write ( addr, data );
                     }
                     6 => {
-                        bus.addr = self.pc;
+                        addr = self.pc;
                         self.step = 0;
                     }
                     _ => unreachable!(),
@@ -508,19 +509,18 @@ impl Cpu {
                     match self.step {
                         2 => {
                             self.pc += 1;
-                            self.temp = bus.data;
-                            bus.addr = self.pc;
+                            self.temp = data;
+                            addr = self.pc;
                         }
                         3 => {
                             self.pc += 1;
-                            let addr = (bus.data as u16) << 8 | (self.temp as u16);
-                            bus.addr = addr
-                                + match self.inst {
-                                    Instruction::AbsIdxX(_) => self.x,
-                                    Instruction::AbsIdxY(_) => self.y,
-                                    _ => unreachable!(),
-                                } as u16;
-                            if (addr & 0xFF00) != (bus.addr & 0xff00) {
+                            let base_addr = (data as u16) << 8 | (self.temp as u16);
+                            addr = base_addr + match self.inst {
+                                Instruction::AbsIdxX(_) => self.x,
+                                Instruction::AbsIdxY(_) => self.y,
+                                _ => unreachable!(),
+                            } as u16;
+                            if (base_addr & 0xFF00) != (addr & 0xff00) {
                                 self.temp = 1;
                             } else {
                                 self.temp = 0;
@@ -528,14 +528,14 @@ impl Cpu {
                         }
                         4 => {
                             if self.temp == 0 {
-                                read_instruction.execute(self, bus.data);
-                                bus.addr = self.pc;
+                                read_instruction.execute(self, data);
+                                addr = self.pc;
                                 self.step = 0;
                             }
                         }
                         5 => {
-                            read_instruction.execute(self, bus.data);
-                            bus.addr = self.pc;
+                            read_instruction.execute(self, data);
+                            addr = self.pc;
                             self.step = 0;
                         }
                         _ => unreachable!(),
@@ -546,25 +546,24 @@ impl Cpu {
                     match self.step {
                         2 => {
                             self.pc += 1;
-                            self.temp = bus.data;
-                            bus.addr = self.pc;
+                            self.temp = data;
+                            addr = self.pc;
                         }
                         3 => {
                             self.pc += 1;
-                            let addr = (bus.data as u16) << 8 | (self.temp as u16);
-                            bus.addr = addr
-                                + match self.inst {
-                                    Instruction::AbsIdxX(_) => self.x,
-                                    Instruction::AbsIdxY(_) => self.y,
-                                    _ => unreachable!(),
-                                } as u16;
+                            let base_addr = (data as u16) << 8 | (self.temp as u16);
+                            addr = base_addr + match self.inst {
+                                Instruction::AbsIdxX(_) => self.x,
+                                Instruction::AbsIdxY(_) => self.y,
+                                _ => unreachable!(),
+                            } as u16;
                         }
                         4 => {
-                            bus.data = write_instruction.execute(self);
-                            return false;
+                            data = write_instruction.execute(self);
+                            return BusEvent::Write ( addr, data );
                         }
                         5 => {
-                            bus.addr = self.pc;
+                            addr = self.pc;
                             self.step = 0;
                         }
                         _ => unreachable!(),
@@ -575,19 +574,18 @@ impl Cpu {
                 )) => match self.step {
                     2 => {
                         self.pc += 1;
-                        self.temp = bus.data;
-                        bus.addr = self.pc;
+                        self.temp = data;
+                        addr = self.pc;
                     }
                     3 => {
                         self.pc += 1;
-                        let addr = (bus.data as u16) << 8 | (self.temp as u16);
-                        bus.addr = addr
-                            + match self.inst {
-                                Instruction::AbsIdxX(_) => self.x,
-                                Instruction::AbsIdxY(_) => self.y,
-                                _ => unreachable!(),
-                            } as u16;
-                        if (addr & 0xFF00) != (bus.addr & 0xff00) {
+                        let base_addr = (data as u16) << 8 | (self.temp as u16);
+                        addr = base_addr + match self.inst {
+                            Instruction::AbsIdxX(_) => self.x,
+                            Instruction::AbsIdxY(_) => self.y,
+                            _ => unreachable!(),
+                        } as u16;
+                        if (base_addr & 0xFF00) != (addr & 0xff00) {
                             self.temp = 1;
                         } else {
                             self.temp = 0;
@@ -595,19 +593,19 @@ impl Cpu {
                     }
                     4 => {
                         if self.temp != 0 {
-                            bus.addr += 0x100;
+                            addr += 0x100;
                         }
                     }
                     5 => {
-                        self.temp = bus.data;
-                        return false;
+                        self.temp = data;
+                        return BusEvent::Write ( addr, data );
                     }
                     6 => {
-                        bus.data = read_modify_write_instruction.execute(self, self.temp);
-                        return false;
+                        data = read_modify_write_instruction.execute(self, self.temp);
+                        return BusEvent::Write ( addr, data );
                     }
                     7 => {
-                        bus.addr = self.pc;
+                        addr = self.pc;
                         self.step = 0;
                     }
                     _ => unreachable!(),
@@ -618,7 +616,7 @@ impl Cpu {
                 Instruction::Rel(RelInstruction::Branch(branch_instruction)) => match self.step {
                     2 => {
                         self.pc += 1;
-                        self.temp = bus.data;
+                        self.temp = data;
                         if branch_instruction.execute(self) {
                             let j = (self.temp as i8) as i16;
                             let pc = self.pc.wrapping_add_signed(j);
@@ -631,13 +629,13 @@ impl Cpu {
                         } else {
                             self.step = 0;
                         }
-                        bus.addr = self.pc;
+                        addr = self.pc;
                     }
                     3 => {
                         if self.temp == 0 {
                             self.step = 0;
                         }
-                        bus.addr = self.pc;
+                        addr = self.pc;
                     }
                     4 => {
                         self.step = 0;
@@ -647,23 +645,23 @@ impl Cpu {
                 Instruction::IdxInd(IdxIndInstruction::Read(read_instruction)) => match self.step {
                     2 => {
                         self.pc += 1;
-                        bus.addr = bus.data as u16;
+                        addr = data as u16;
                     }
                     3 => {
-                        bus.addr = bus.addr.wrapping_add(self.x as u16);
-                        bus.addr &= 0x00FF;
+                        addr = addr.wrapping_add(self.x as u16);
+                        addr &= 0x00FF;
                     }
                     4 => {
-                        self.temp = bus.data;
-                        bus.addr = bus.addr.wrapping_add(1);
-                        bus.addr &= 0x00FF;
+                        self.temp = data;
+                        addr = addr.wrapping_add(1);
+                        addr &= 0x00FF;
                     }
                     5 => {
-                        bus.addr = (bus.data as u16) << 8 | self.temp as u16;
+                        addr = (data as u16) << 8 | self.temp as u16;
                     }
                     6 => {
-                        read_instruction.execute(self, bus.data);
-                        bus.addr = self.pc;
+                        read_instruction.execute(self, data);
+                        addr = self.pc;
                         self.step = 0;
                     }
                     _ => unreachable!(),
@@ -672,24 +670,24 @@ impl Cpu {
                 {
                     2 => {
                         self.pc += 1;
-                        bus.addr = bus.data as u16;
+                        addr = data as u16;
                     }
                     3 => {
-                        bus.addr = bus.addr.wrapping_add(self.x as u16);
-                        bus.addr &= 0x00FF;
+                        addr = addr.wrapping_add(self.x as u16);
+                        addr &= 0x00FF;
                     }
                     4 => {
-                        self.temp = bus.data;
-                        bus.addr = bus.addr.wrapping_add(1);
-                        bus.addr &= 0x00FF;
+                        self.temp = data;
+                        addr = addr.wrapping_add(1);
+                        addr &= 0x00FF;
                     }
                     5 => {
-                        bus.addr = (bus.data as u16) << 8 | self.temp as u16;
-                        bus.data = write_instruction.execute(self);
-                        return false;
+                        addr = (data as u16) << 8 | self.temp as u16;
+                        data = write_instruction.execute(self);
+                        return BusEvent::Write ( addr, data );
                     }
                     6 => {
-                        bus.addr = self.pc;
+                        addr = self.pc;
                         self.step = 0;
                     }
                     _ => unreachable!(),
@@ -697,29 +695,29 @@ impl Cpu {
                 Instruction::IndIdx(IndIdxInstruction::Read(read_instruction)) => match self.step {
                     2 => {
                         self.pc += 1;
-                        bus.addr = bus.data as u16;
+                        addr = data as u16;
                     }
                     3 => {
-                        self.temp = bus.data; // ADL
-                        bus.addr = bus.addr.wrapping_add(1) & 0x00FF;
+                        self.temp = data; // ADL
+                        addr = addr.wrapping_add(1) & 0x00FF;
                     }
                     4 => {
                         let adl_idx = self.temp.wrapping_add(self.y);
-                        bus.addr = (bus.data as u16) << 8 | adl_idx as u16;
+                        addr = (data as u16) << 8 | adl_idx as u16;
                     }
                     5 => {
-                        let adl_idx = (bus.addr & 0x00FF) as u8;
+                        let adl_idx = (addr & 0x00FF) as u8;
                         if adl_idx < self.temp {
-                            bus.addr += 0x100;
+                            addr += 0x100;
                         } else {
-                            read_instruction.execute(self, bus.data);
-                            bus.addr = self.pc;
+                            read_instruction.execute(self, data);
+                            addr = self.pc;
                             self.step = 0;
                         }
                     }
                     6 => {
-                        read_instruction.execute(self, bus.data);
-                        bus.addr = self.pc;
+                        read_instruction.execute(self, data);
+                        addr = self.pc;
                         self.step = 0;
                     }
                     _ => unreachable!(),
@@ -728,26 +726,26 @@ impl Cpu {
                 {
                     2 => {
                         self.pc += 1;
-                        bus.addr = bus.data as u16;
+                        addr = data as u16;
                     }
                     3 => {
-                        self.temp = bus.data; // ADL
-                        bus.addr = bus.addr.wrapping_add(1) & 0x00FF;
+                        self.temp = data; // ADL
+                        addr = addr.wrapping_add(1) & 0x00FF;
                     }
                     4 => {
                         let adl_idx = self.temp.wrapping_add(self.y);
-                        bus.addr = (bus.data as u16) << 8 | adl_idx as u16;
+                        addr = (data as u16) << 8 | adl_idx as u16;
                     }
                     5 => {
-                        let adl_idx = (bus.addr & 0x00FF) as u8;
+                        let adl_idx = (addr & 0x00FF) as u8;
                         if adl_idx < self.temp {
-                            bus.addr += 0x100;
+                            addr += 0x100;
                         }
-                        bus.data = write_instruction.execute(self);
-                        return false;
+                        data = write_instruction.execute(self);
+                        return BusEvent::Write ( addr, data );
                     }
                     6 => {
-                        bus.addr = self.pc;
+                        addr = self.pc;
                         self.step = 0;
                     }
                     _ => unreachable!(),
@@ -755,24 +753,24 @@ impl Cpu {
                 Instruction::AbsInd(_) => match self.step {
                     2 => {
                         self.pc += 1;
-                        self.temp = bus.data;
-                        bus.addr = self.pc;
+                        self.temp = data;
+                        addr = self.pc;
                     }
                     3 => {
                         self.pc += 1;
-                        bus.addr = (bus.data as u16) << 8 | self.temp as u16;
+                        addr = (data as u16) << 8 | self.temp as u16;
                     }
                     4 => {
-                        self.temp = bus.data;
-                        let adh = bus.addr & 0xFF00;
-                        let adl = (bus.addr & 0x00FF) as u8;
+                        self.temp = data;
+                        let adh = addr & 0xFF00;
+                        let adl = (addr & 0x00FF) as u8;
                         let adl = adl.wrapping_add(1);
-                        bus.addr = adh | adl as u16;
+                        addr = adh | adl as u16;
                     }
                     5 => {
-                        self.pc = (bus.data as u16) << 8 | self.temp as u16;
+                        self.pc = (data as u16) << 8 | self.temp as u16;
                         self.step = 0;
-                        bus.addr = self.pc;
+                        addr = self.pc;
                     }
                     _ => unreachable!(),
                 },
@@ -788,20 +786,47 @@ impl Cpu {
         // IRQ is level triggered - needs to be set each clock.
         self.irq = false;
 
-        true
+        BusEvent::Read ( addr )
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bus::BusDevice;
     use std::fs::File;
     use std::io::prelude::*;
+    use std::ops::DerefMut;
     use std::path::Path;
 
     #[test]
     fn _6502_functional_test() {
-        let mut ram = [0u8; 0x10000];
+        struct Ram([u8; 65536]);
+        let mut ram = Ram([0; 65536]);
+
+        impl BusDevice for Ram {
+            fn read(&self, addr: u16) -> u8 {
+                self.0[addr as usize]
+            }
+        
+            fn write(&mut self, addr: u16, data: u8) {
+                self.0[addr as usize] = data
+            }
+        }
+
+        impl std::ops::Deref for Ram {
+            type Target = [u8; 65536];
+        
+            fn deref(&self) -> &Self::Target {
+                &self.0
+            }
+        }
+
+        impl std::ops::DerefMut for Ram {
+            fn deref_mut(&mut self) -> &mut Self::Target {
+                &mut self.0
+            }
+        }
 
         let path = Path::new("6502_65C02_functional_tests/bin_files/6502_functional_test.bin");
         let mut file = match File::open(path) {
@@ -809,24 +834,29 @@ mod tests {
             Err(why) => panic!("Couldn't open {}: {}", path.display(), why),
         };
 
-        match file.read(&mut ram) {
+        match file.read(ram.deref_mut()) {
             Ok(n) => assert_eq!(n, 0x10000),
             Err(why) => panic!("Couldn't read {}: {}", path.display(), why),
         }
 
-        let mut cpu = Cpu::new();
-        let mut bus = Bus::new();
+        let mut addr = 0x400;
+        let mut data = ram.read(addr);
 
-        cpu.pc = 0x400;
+        let mut cpu = Cpu::new();
+        cpu.pc = addr;
         cpu.step = 0;
-        bus.addr = 0x400;
-        bus.data = ram[0x400];
 
         for _ in 0u64..96241364 {
-            if cpu.clock(&mut bus) {
-                bus.data = ram[bus.addr as usize];
-            } else {
-                ram[bus.addr as usize] = bus.data;
+            match cpu.clock(addr, data) {
+                BusEvent::Read ( addr_new ) => {
+                    data = ram.read(addr_new);
+                    addr = addr_new;
+                }
+                BusEvent::Write ( addr_new, data_new ) => {
+                    ram.write(addr_new, data_new);
+                    data = data_new;
+                    addr = addr_new;
+                }
             }
         }
 

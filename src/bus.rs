@@ -1,11 +1,9 @@
-#[derive(Default)]
-pub struct Bus {
-    pub addr: u16,
-    pub data: u8,
+pub trait BusDevice {
+    fn read(&self, addr: u16) -> u8;
+    fn write(&mut self, addr: u16, data: u8);
 }
 
-impl Bus {
-    pub fn new() -> Self {
-        Bus::default()
-    }
+pub enum BusEvent {
+    Read(u16),
+    Write(u16, u8)
 }
